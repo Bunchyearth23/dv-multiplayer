@@ -117,11 +117,14 @@ public class NetworkedPlayer : MonoBehaviour
     // Inventory and item holding
     private GameObject inventoryRoot;
     public GameObject RightHandItemGO { get; private set; }
-    private readonly List<Collider> disabledRHItemColliders = [];
+    private readonly Dictionary<Collider, bool> disabledRHItemColliders = [];
     public GameObject LeftHandItemGO { get; private set; }
-    private readonly List<Collider> disabledLHItemColliders = [];
+    private readonly Dictionary<Collider, bool> disabledLHItemColliders = [];
+    private bool rightInteractionAllowed, leftInteractionAllowed;
     private Vector3? itemHoldPos;
     private Quaternion? itemHoldRot;
+    private Vector3? leftItemHoldPos;
+    private Quaternion? leftItemHoldRot;
 
     WindPhysicsController windController;
 
@@ -332,11 +335,7 @@ public class NetworkedPlayer : MonoBehaviour
             selfTransform.rotation = Quaternion.Lerp(transform.rotation, targetRotation, t);
         }
 
-        if (RightHandItemGO != null)
-        {
-            RightHandItemGO.transform.position = selfTransform.position + GetItemOffsetFromPlayer();
-            RightHandItemGO.transform.rotation = selfTransform.rotation * (itemHoldRot ?? Quaternion.identity);//ItemPositionController.Instance.itemAnchor.localRotation);
-        }
+
     }
 
     /// <summary>
@@ -362,6 +361,8 @@ public class NetworkedPlayer : MonoBehaviour
 
         if (IsVR)
             ApplyHandTracking();
+        UpdateHeldItem(true);
+        UpdateHeldItem(false);
     }
 
     private void ApplySpineAndHeadRotation()
@@ -447,7 +448,9 @@ public class NetworkedPlayer : MonoBehaviour
             targetRightHandRot = trackingData.RightHandRotation.Value;
 
         // Todo: improve sync, the arms can be a little spaghetti-y
-        if (!handTrackingInitialized)
+        if (!handTrackingInitialized && trackingData.LeftHandPosition.HasValue &&
+            trackingData.LeftHandRotation.HasValue && trackingData.RightHandPosition.HasValue &&
+            trackingData.RightHandRotation.HasValue)
         {
             currentLeftHandWorldPos = targetLeftHandPos;
             currentLeftHandWorldRot = targetLeftHandRot;
@@ -515,6 +518,13 @@ public class NetworkedPlayer : MonoBehaviour
     /// <param name="itemGo">The item GameObject to attach</param>
     public void AddItemToInventory(GameObject itemGo)
     {
+        if (itemGo == null) return;
+        ReleaseItem(itemGo);
+        if (inventoryRoot == null)
+        {
+            inventoryRoot = new GameObject("Remote inventory");
+            inventoryRoot.transform.SetParent(selfTransform, false);
+        }
         itemGo.transform.SetParent(inventoryRoot.transform, true);
         itemGo.SetActive(false);
     }
@@ -527,69 +537,90 @@ public class NetworkedPlayer : MonoBehaviour
     /// <param name="targetRot">Optional local rotation offset</param>
     /// <param name="rightHand">Indicates if the item is held in the right hand. Always true for nonVR</param>
 
-    // TODO: This currently only supports right hand holding and will need to be expanded to support left hand items and dual hand items
     public void HoldItem(GameObject itemGo, Vector3? targetPos = null, Quaternion? targetRot = null, bool rightHand = true)
     {
-        Multiplayer.LogDebug(() => $"NetworkedPlayer.HoldItem({itemGo.GetPath()}) Player: {username}, Before position: {itemGo.transform.localPosition}, rotation:  {itemGo.transform.localRotation}, Target pos: {targetPos}, Target rot: {targetRot}");
-
-        itemGo.transform.SetParent(selfTransform, true);
-        var itemGrabHandler = itemGo.GetComponentInChildren<GrabHandlerItem>();
-        if (itemGrabHandler != null)
+        if (itemGo == null) return;
+        var current = rightHand ? RightHandItemGO : LeftHandItemGO;
+        if (current != itemGo)
         {
-            itemGrabHandler.TogglePhysics(false);
-            itemGrabHandler.interactionAllowed = false;
+            // A transfer releases the previous hand, while two distinct items remain independent.
+            ReleaseItem(itemGo);
+            DropItem(rightHand);
+            itemGo.SetActive(true);
+            itemGo.transform.SetParent(selfTransform, true);
+            var grab = itemGo.GetComponentInChildren<GrabHandlerItem>(true);
+            var colliders = rightHand ? disabledRHItemColliders : disabledLHItemColliders;
+            foreach (Collider col in itemGo.GetComponentsInChildren<Collider>(true))
+                if (col != null) colliders.Add(col, col.enabled);
+            if (grab != null)
+            {
+                if (rightHand) rightInteractionAllowed = grab.interactionAllowed;
+                else leftInteractionAllowed = grab.interactionAllowed;
+                grab.TogglePhysics(false); grab.interactionAllowed = false;
+            }
+            foreach (var col in colliders.Keys) if (col != null) col.enabled = false;
         }
-
-        // Disable colliders to stop annoying noises and other potential issues
-        disabledRHItemColliders.Clear();
-        foreach (Collider col in itemGo.GetComponentsInChildren<Collider>(true))
-        {
-            Multiplayer.LogDebug(() => $"NetworkedPlayer.HoldItem() Collider: {col.name}, Enabled: {col.enabled}, Type: {col.GetType()}");
-            if (col != null && col.enabled)
-                col.enabled = false;
-
-            disabledRHItemColliders.Add(col);
-        }
-
-        RightHandItemGO = itemGo;
-        itemHoldPos = targetPos;
-        itemHoldRot = targetRot;
+        if (rightHand) { RightHandItemGO = itemGo; itemHoldPos = targetPos; itemHoldRot = targetRot; }
+        else { LeftHandItemGO = itemGo; leftItemHoldPos = targetPos; leftItemHoldRot = targetRot; }
+        itemGo.SetActive(true);
     }
 
-    /// <summary>
-    /// Drops the player's currently held item
-    /// </summary>
-
-    // TODO: This currently only supports right hand holding and will need to be expanded to support left hand items and dual hand items
-    public void DropItem()
+    public void DropItem(bool rightHand = true)
     {
-        // Re-enable previously disabled colliders
-        foreach (Collider col in disabledRHItemColliders)
+        var item = rightHand ? RightHandItemGO : LeftHandItemGO;
+        var colliders = rightHand ? disabledRHItemColliders : disabledLHItemColliders;
+        var grab = item != null ? item.GetComponentInChildren<GrabHandlerItem>(true) : null;
+        if (grab != null)
         {
-            Multiplayer.LogDebug(() => $"NetworkedPlayer.DropItem() Re-enabling collider: {col.name}, Type: {col.GetType()}");
-            if (col != null)
-                col.enabled = true;
+            grab.TogglePhysics(true);
+            grab.interactionAllowed = rightHand ? rightInteractionAllowed : leftInteractionAllowed;
         }
-        disabledRHItemColliders.Clear();
-
-        var itemGrabHandler = RightHandItemGO.GetComponentInChildren<GrabHandlerItem>();
-        if (itemGrabHandler != null)
-        {
-            itemGrabHandler.TogglePhysics(true);
-            itemGrabHandler.interactionAllowed = true;
-        }
-
-        RightHandItemGO?.transform.SetParent(WorldMover.OriginShiftParent, true);
-
-        RightHandItemGO = null;
-        itemHoldPos = null;
-        itemHoldRot = null;
+        foreach (var col in colliders) if (col.Key != null) col.Key.enabled = col.Value;
+        colliders.Clear();
+        if (item != null) item.transform.SetParent(WorldMover.OriginShiftParent, true);
+        if (rightHand) { RightHandItemGO = null; itemHoldPos = null; itemHoldRot = null; }
+        else { LeftHandItemGO = null; leftItemHoldPos = null; leftItemHoldRot = null; }
     }
 
-    private Vector3 GetItemOffsetFromPlayer()
+    private void UpdateHeldItem(bool rightHand)
     {
-        Vector3 baseOffset = itemAnchorOffset;
-        Vector3 finalOffset = itemHoldPos.HasValue ? baseOffset + itemHoldPos.Value : baseOffset;
-        return selfTransform.TransformDirection(finalOffset);
+        var item = rightHand ? RightHandItemGO : LeftHandItemGO;
+        if (item == null) return;
+        var offset = rightHand ? itemHoldPos : leftItemHoldPos;
+        var rotation = rightHand ? itemHoldRot : leftItemHoldRot;
+        if (IsVR && handTrackingInitialized)
+        {
+            var handPos = rightHand ? currentRightHandWorldPos : currentLeftHandWorldPos;
+            var handRot = rightHand ? currentRightHandWorldRot : currentLeftHandWorldRot;
+            var worldRot = targetRotation * handRot;
+            item.transform.position = selfTransform.position + targetRotation * handPos + worldRot * (offset ?? Vector3.zero);
+            item.transform.rotation = worldRot * (rotation ?? Quaternion.identity);
+        }
+        else
+        {
+            var anchor = itemAnchorOffset;
+            if (!rightHand) anchor.x = -anchor.x;
+            item.transform.position = selfTransform.position + selfTransform.TransformDirection(anchor + (offset ?? Vector3.zero));
+            item.transform.rotation = selfTransform.rotation * (rotation ?? Quaternion.identity);
+        }
     }
+    public void ReleaseItem(GameObject item)
+    {
+        if (item == null) return;
+        if (RightHandItemGO == item) DropItem();
+        if (LeftHandItemGO == item) DropItem(false);
+        if (item.transform.IsChildOf(selfTransform))
+            item.transform.SetParent(WorldMover.OriginShiftParent, true);
+    }
+
+    public void ReleaseItems()
+    {
+        DropItem();
+        DropItem(false);
+        if (inventoryRoot == null) return;
+        while (inventoryRoot.transform.childCount > 0)
+            inventoryRoot.transform.GetChild(0).SetParent(WorldMover.OriginShiftParent, true);
+    }
+
 }
+

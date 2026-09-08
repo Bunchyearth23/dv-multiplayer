@@ -73,23 +73,37 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
         playerList = gameObject.AddComponent<PlayerListGUI>();
         Stats = gameObject.AddComponent<NetworkStatsGui>();
         //RegisterPackets();
-        WorldStreamingInit.LoadingFinished += () => { playerList.RegisterListeners(); };
+        WorldStreamingInit.LoadingFinished += OnWorldLoadingFinished;
         Settings.OnSettingsUpdated += OnSettingsUpdated;
         SceneSwitcher.SceneRequested += OnSceneSwitchRequested;
-        SceneManager.sceneLoaded += (scene, _) =>
-        {
-            if (scene.buildIndex != (int)DVScenes.MainMenu)
-                return;
-
-            playerList.UnRegisterListeners();
-            TriggerMainMenuEventLater();
-        };
+        SceneManager.sceneLoaded += OnSceneLoaded;
         StartCoroutine(PollEvents());
+    }
+
+    private void OnWorldLoadingFinished() => playerList?.RegisterListeners();
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (scene.buildIndex != (int)DVScenes.MainMenu) return;
+        playerList?.UnRegisterListeners();
+        TriggerMainMenuEventLater();
+    }
+
+    protected override void OnDestroy()
+    {
+        WorldStreamingInit.LoadingFinished -= OnWorldLoadingFinished;
+        Settings.OnSettingsUpdated -= OnSettingsUpdated;
+        SceneSwitcher.SceneRequested -= OnSceneSwitchRequested;
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+        Stop();
+        mainMenuLoadedQueue.Clear();
+        base.OnDestroy();
     }
 
     private void OnSceneSwitchRequested(DVScenes scene)
     {
         IsReturningToMenu = scene == DVScenes.MainMenu;
+        if (IsReturningToMenu) Stop();
     }
 
     private void OnSettingsUpdated(Settings settings)
@@ -97,7 +111,7 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
         if (!IsClientRunning && !IsServerRunning)
             return;
         if (settings.ShowStats)
-            Stats.Show(Client.Statistics, Server?.Statistics);
+            Stats.Show(Client?.Statistics, Server?.Statistics);
         else
             Stats.Hide();
     }
@@ -227,23 +241,36 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
         }
     }
 
+    private bool stopping;
+
     public void Stop()
     {
-        Stats?.Hide();
-
-        if (Server != null)
+        if (stopping) return;
+        stopping = true;
+        void CleanupStep(string name, Action action)
         {
-            Server?.Stop();
-            MultiplayerAPI.ClearServer();
-            Server = null;
+            try { action(); }
+            catch (Exception ex) { Multiplayer.LogError($"Session shutdown failed ({name}): {ex}"); }
         }
-
-        if (Client != null)
+        try
         {
-            Client?.Stop();
-            MultiplayerAPI.ClearClient();
-            Client = null;
+            CleanupStep("statistics", () => Stats?.Hide());
+            // Do not create a new singleton while tearing the session down.
+            CleanupStep("RPC cancellation", () => FindObjectOfType<RpcManager>()?.CancelAll());
+            if (Server != null)
+            {
+                CleanupStep("server", () => Server.Stop());
+                CleanupStep("server API", MultiplayerAPI.ClearServer);
+                Server = null;
+            }
+            if (Client != null)
+            {
+                CleanupStep("client", () => Client.Stop());
+                CleanupStep("client API", MultiplayerAPI.ClearClient);
+                Client = null;
+            }
         }
+        finally { stopping = false; }
     }
 
     protected void OnApplicationQuit()

@@ -1,19 +1,19 @@
 using Multiplayer.Components.Networking.Train;
-using System.Collections.Generic;
+using Multiplayer.Utils;
 using UnityEngine;
 
 namespace Multiplayer.Components.Networking;
 
 public abstract class TickedQueue<T> : MonoBehaviour
 {
-    private const float WARNING_THRESHOLD_SECONDS = 3.0f;
-    private const uint QUEUE_LENGTH_WARNING = (uint)(NetworkLifecycle.TICK_RATE * WARNING_THRESHOLD_SECONDS);
-    private const uint SNAPSHOT_GAP_WARNING = (uint)(NetworkLifecycle.TICK_RATE * WARNING_THRESHOLD_SECONDS);
-
-    private uint lastTick;
-    private uint lastReceivedTick;
-    private readonly Queue<(uint, T)> snapshots = new();
+    private readonly TickSnapshotBuffer<T> snapshots = new(256);
+    public int PendingSnapshots => snapshots.Count;
+    public int SnapshotHighWater => snapshots.HighWater;
+    public long StaleSnapshots => snapshots.Stale;
+    public long SnapshotOverflows => snapshots.Overflows;
+    public long AppliedSnapshots { get; private set; }
     protected string identifier;
+    private float nextReport;
 
     protected virtual void OnEnable()
     {
@@ -25,38 +25,40 @@ public abstract class TickedQueue<T> : MonoBehaviour
         if (UnloadWatcher.isQuitting)
             return;
         NetworkLifecycle.Instance.OnTick -= OnTick;
-        lastTick = 0;
-        snapshots.Clear();
+        snapshots.Reset();
+        AppliedSnapshots = 0;
+        nextReport = 0;
         identifier = string.Empty;
     }
 
     public void ReceiveSnapshot(T snapshot, uint tick)
     {
-        if (tick <= lastTick)
-            return;
-
-        if (snapshots.Count >= QUEUE_LENGTH_WARNING)
-            Multiplayer.LogWarning($"[{GetID()}] Snapshot queue exceeds {QUEUE_LENGTH_WARNING} items. Current size: {snapshots.Count}");
-
-        if (lastReceivedTick > 0 && tick - lastReceivedTick > SNAPSHOT_GAP_WARNING)
-            Multiplayer.LogWarning($"[{GetID()}] Large gap between snapshots: {tick - lastReceivedTick} ticks.");
-
-        lastReceivedTick = tick;
-        lastTick = tick;
-        snapshots.Enqueue((tick, snapshot));
+        if (!snapshots.TryEnqueue(snapshot, tick))
+            NetworkLifecycle.Instance.Client.FailWorldSync(new System.InvalidOperationException(
+                $"[{GetID()}] Train snapshot queue exceeded 256 entries; refusing silent event loss."));
     }
-
     private void OnTick(uint tick)
     {
         if (snapshots.Count == 0 || UnloadWatcher.isUnloading)
             return;
-        while (snapshots.Count > 0)
+        if (Time.realtimeSinceStartup >= nextReport)
         {
-            (uint snapshotTick, T snapshot) = snapshots.Dequeue();
-            Process(snapshot, snapshotTick);
+            nextReport = Time.realtimeSinceStartup + 10f;
+            Multiplayer.Log($"train_queue id={GetID()} pending={PendingSnapshots} high_water={SnapshotHighWater} stale={StaleSnapshots} overflows={SnapshotOverflows} applied={AppliedSnapshots}");
+        }
+        try
+        {
+            snapshots.Drain(32, (snapshot, snapshotTick) =>
+            {
+                Process(snapshot, snapshotTick);
+                AppliedSnapshots++;
+            });
+        }
+        catch (System.Exception error)
+        {
+            NetworkLifecycle.Instance.Client.FailWorldSync(error);
         }
     }
-
     public void Clear()
     {
         snapshots.Clear();
@@ -66,7 +68,7 @@ public abstract class TickedQueue<T> : MonoBehaviour
 
     private string GetID()
     {
-        if (!string .IsNullOrEmpty(identifier))
+        if (!string.IsNullOrEmpty(identifier))
             return identifier;
 
         if (this.gameObject == null)
@@ -75,7 +77,7 @@ public abstract class TickedQueue<T> : MonoBehaviour
         TrainCar car = TrainCar.Resolve(this.gameObject);
         int bogie = 0;
 
-        if (car != null)
+        if (car != null && car.Bogies != null && car.Bogies.Length > 0)
             if (this is NetworkedBogie netBogie)
                 bogie = (car.Bogies[0] == netBogie.Bogie) ? 1 : 2;
 
@@ -85,3 +87,6 @@ public abstract class TickedQueue<T> : MonoBehaviour
         return identifier ?? "Unknown";
     }
 }
+
+
+

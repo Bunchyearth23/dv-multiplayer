@@ -1,8 +1,11 @@
 using DV.CashRegister;
+using DV.Booklets;
 using DV.Interaction;
 using DV.InventorySystem;
 using DV.Shops;
 using Multiplayer.Networking.Data;
+using Multiplayer.Networking.Data.Items;
+using Multiplayer.Networking.Data.RPCs;
 using Multiplayer.Networking.Managers.Server;
 using Multiplayer.Networking.Packets.Common;
 using Multiplayer.Utils;
@@ -110,6 +113,33 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     #region Server
 
+    public ShopQuote Server_QuoteShopCart(ServerPlayer player, string[] itemIds, int[] quantities)
+    {
+        if (!NetworkLifecycle.Instance.IsHost() || player == null || player.LoadingState != PlayerLoadingState.Complete)
+            return new ShopQuote(ShopQuoteStatus.NotReady);
+        if (!NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientPurchases))
+            return new ShopQuote(ShopQuoteStatus.PermissionDenied);
+        if (!IsShopRegister || CashRegister == null)
+            return new ShopQuote(ShopQuoteStatus.InvalidShop);
+        if (!transform.PlayerCanReach(player, 1))
+            return new ShopQuote(ShopQuoteStatus.OutOfReach);
+
+        var controller = GlobalShopController.Instance;
+        var shop = controller.globalShopList.FirstOrDefault(candidate => candidate != null && candidate.cashRegister == CashRegister);
+        if (shop == null || shop.scanItemResourceModules == null)
+            return new ShopQuote(ShopQuoteStatus.InvalidShop);
+
+        return ShopCartPolicy.Quote(itemIds, quantities, Inventory.Instance.PlayerMoney, id =>
+        {
+            var data = controller.GetShopItemData(id);
+            if (data == null || data.item == null || data.unavailableDueToGameMode ||
+                (!data.isGlobal && (data.soldOnlyAt == null || !data.soldOnlyAt.Contains(shop))) ||
+                !shop.scanItemResourceModules.Any(module => module != null && module.sellingItemSpec == data.item))
+                return null;
+            return (ShopOffer?)new ShopOffer(data.basePrice, data.ItemsInStock);
+        });
+    }
+
     public void Server_InitCashRegister(CullingManager cullingManager)
     {
         if (!NetworkLifecycle.Instance.IsHost() || cullingManager == null)
@@ -144,7 +174,9 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
         CashRegisterAction response = CashRegisterAction.RejectGeneric;
 
         NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount})");
-        if (transform.PlayerCanReach(player, 1))
+        if (NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientPurchases) &&
+            CashRegister != null && (!IsShopRegister || packet.Action == CashRegisterAction.Cancel) && transform.PlayerCanReach(player, 1) &&
+            (packet.Action == CashRegisterAction.Cancel || packet.Action == CashRegisterAction.Buy || packet.Action == CashRegisterAction.AddCash))
         {
             processingAction = true;
             switch (packet.Action)
@@ -238,6 +270,198 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
     #endregion
 
     #region Client
+
+    /// <summary>Snapshots the local basket and requests an authoritative, non-binding quote.</summary>
+    public RpcTicket RequestShopQuote(Action<ShopQuoteResponse> onResponse, Action onTimeout)
+    {
+        if (!IsShopRegister || CashRegister == null)
+            throw new InvalidOperationException("This cash register is not a shop.");
+
+        var (itemIds, quantities) = ReadShopBasket();
+
+        var client = NetworkLifecycle.Instance.Client;
+        var ticket = RpcManager.Instance.CreateTicket(client.RPC_Timeout)
+            .OnResolve(response =>
+            {
+                if (response is ShopQuoteResponse quote && quote.RegisterNetId == NetId)
+                    onResponse?.Invoke(quote);
+            })
+            .OnTimeout(onTimeout);
+        client.SendShopQuoteRequest(ticket.TicketId, NetId, itemIds, quantities);
+        return ticket;
+    }
+
+    private (string[] ItemIds, int[] Quantities) ReadShopBasket()
+    {
+        var itemIds = new List<string>();
+        var quantities = new List<int>();
+        foreach (var module in CashRegister.registerModules.OfType<ScanItemCashRegisterModule>())
+        {
+            float units = module.Data.unitsToBuy;
+            if (units == 0)
+                continue;
+            if (float.IsNaN(units) || float.IsInfinity(units) || units < 1 ||
+                units > ShopCartPolicy.MaxQuantity || units != Math.Floor(units) || module.sellingItemSpec == null)
+                throw new InvalidOperationException("Invalid shop basket quantity or item.");
+            itemIds.Add(module.sellingItemSpec.ItemPrefabName);
+            quantities.Add((int)units);
+        }
+        if (itemIds.Count == 0 || itemIds.Count > ShopCartPolicy.MaxLines)
+            throw new InvalidOperationException("Shop basket must contain between 1 and 64 lines.");
+
+        return (itemIds.ToArray(), quantities.ToArray());
+    }
+
+    public ShopPurchaseOperation PendingShopPurchase { get; private set; }
+    private bool shopRequestInFlight;
+    private uint shopRequestGeneration;
+
+    /// <summary>Retries preserve the original basket until an authoritative outcome is received.</summary>
+    public RpcTicket RequestShopPurchase(Action<ShopPurchaseResponse> onResponse, Action onTimeout)
+    {
+        if (!IsShopRegister || CashRegister == null)
+            throw new InvalidOperationException("This cash register is not a shop.");
+        if (shopRequestInFlight)
+            throw new InvalidOperationException("A shop purchase request is already in flight.");
+        if (PendingShopPurchase?.RecoveryRequired == true)
+            throw new InvalidOperationException("The previous shop purchase requires server recovery.");
+        if (PendingShopPurchase?.IsComplete == true)
+            throw new InvalidOperationException("Apply the previous purchase result before starting another purchase.");
+        if (PendingShopPurchase == null)
+        {
+            var (ids, quantities) = ReadShopBasket();
+            PendingShopPurchase = new ShopPurchaseOperation(NetId, ids, quantities);
+        }
+        var operation = PendingShopPurchase;
+        var client = NetworkLifecycle.Instance.Client;
+        uint generation = ++shopRequestGeneration;
+        shopRequestInFlight = true;
+        var ticket = RpcManager.Instance.CreateTicket(client.RPC_Timeout)
+            .OnResolve(response =>
+            {
+                if (generation != shopRequestGeneration) return;
+                shopRequestInFlight = false;
+                if (response is not ShopPurchaseResponse purchase || !operation.Accept(purchase))
+                {
+                    onTimeout?.Invoke(); // Unknown outcome: retain the operation for a safe retry.
+                    return;
+                }
+                onResponse?.Invoke(purchase);
+            })
+            .OnTimeout(() =>
+            {
+                if (generation != shopRequestGeneration) return;
+                shopRequestInFlight = false;
+                onTimeout?.Invoke();
+            });
+        var request = operation.CreateRequest(ticket.TicketId);
+        try
+        {
+            client.SendShopPurchaseRequest(request.TicketId, request.OperationId, request.RegisterNetId,
+                request.ItemIds, request.Quantities);
+        }
+        catch
+        {
+            // Delivery may already have occurred; preserve identity even on a transport exception.
+            ++shopRequestGeneration;
+            shopRequestInFlight = false;
+            throw;
+        }
+        return ticket;
+    }
+
+    /// <summary>Call after applying the result to the basket/UI, so a failing callback cannot buy it again.</summary>
+    public bool AcknowledgeShopPurchase(string operationId)
+    {
+        if (PendingShopPurchase == null || PendingShopPurchase.OperationId != operationId ||
+            !PendingShopPurchase.IsComplete || PendingShopPurchase.RecoveryRequired || shopRequestInFlight)
+            return false;
+        PendingShopPurchase = null;
+        return true;
+    }
+
+    public IEnumerator BuyShop()
+    {
+        if (!IsShopRegister || IsBusy || NetworkLifecycle.Instance.IsProcessingPacket)
+            yield break;
+
+        DisableInteraction();
+        CashRegister.IsProcessingTransaction = true;
+        isBuying = true;
+        bool finished = false;
+        ShopPurchaseResponse result = null;
+        try
+        {
+            RequestShopPurchase(response => { result = response; finished = true; }, () => finished = true);
+        }
+        catch (Exception ex)
+        {
+            Multiplayer.LogError("Unable to start shop purchase: " + ex);
+            finished = true;
+        }
+
+        yield return new WaitUntil(() => finished);
+
+        try
+        {
+            if (result == null)
+            {
+                Multiplayer.LogWarning("Shop purchase outcome is unknown; press buy to retry the same operation.");
+                yield break;
+            }
+
+            if (result.RecoveryRequired)
+            {
+                Multiplayer.LogError($"Shop purchase {result.OperationId} requires server recovery.");
+                yield break;
+            }
+
+            if (result.Status == ShopQuoteStatus.OperationInProgress)
+            {
+                Multiplayer.LogWarning("Shop purchase is still running on the server; press buy to query the same operation again.");
+                yield break;
+            }
+
+            if (result.Status == ShopQuoteStatus.Success)
+            {
+                CashRegister.buyAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f,
+                    default, null, CashRegister.transform, false, 0f, null);
+                var receiptModules = CashRegister.registerModules
+                    .Where(module => module.GetAllNonZeroPurchaseData().Count > 0).ToList();
+                try
+                {
+                    if (receiptModules.Count > 0 && CashRegister.printerController != null)
+                    {
+                        BookletCreator.CreateCashRegisterReceipt(receiptModules,
+                            CashRegister.printerController.spawnAnchor.position,
+                            CashRegister.printerController.spawnAnchor.rotation, WorldMover.OriginShiftParent);
+                        CashRegister.printerController.Print(ignoreCooldown: true);
+                    }
+                }
+                catch (Exception ex) { Multiplayer.LogError("Purchase succeeded, but receipt printing failed: " + ex); }
+                foreach (var module in CashRegister.registerModules) module.ResetData();
+                CashRegister.OnUnitsToBuyChanged();
+                CashRegister.DepositedCash = 0;
+                CashRegister.OnDepositedUpdated();
+            }
+            else
+            {
+                if (result.Status == ShopQuoteStatus.InsufficientFunds)
+                    CashRegister.notEnoughMoneyAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f,
+                        default, null, CashRegister.transform, false, 0f, null);
+                Multiplayer.LogWarning($"Shop purchase rejected: {result.Status}, line {result.FailedLine}.");
+            }
+
+            if (!AcknowledgeShopPurchase(result.OperationId))
+                Multiplayer.LogError($"Shop purchase result could not be acknowledged: {result.OperationId}");
+        }
+        finally
+        {
+            isBuying = false;
+            CashRegister.IsProcessingTransaction = false;
+            EnableInteraction();
+        }
+    }
 
     public void Client_ProcessCashRegisterAction(CashRegisterAction action, double amount)
     {

@@ -19,8 +19,6 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
         set {
             if (_netId.Equals(value))
                 return;
-            if ((_netId as dynamic).CompareTo(default(T)) != 0)
-                idPool.ReleaseId(_netId);
             Register(value);
         }
     }
@@ -29,7 +27,7 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
 
     protected static bool Get(T netId, out IdMonoBehaviour<T, I> obj)
     {
-        if (indexToObject.TryGetValue(netId, out obj))
+        if (TryGet(netId, out obj))
             return true;
         obj = null;
         if ((netId as dynamic).CompareTo(default(T)) != 0)
@@ -40,7 +38,12 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
     protected static bool TryGet(T netId, out IdMonoBehaviour<T, I> obj)
     {
         if (indexToObject.TryGetValue(netId, out obj))
-            return true;
+        {
+            if (obj != null)
+                return true;
+            indexToObject.Remove(netId);
+            idPool.ReleaseId(netId);
+        }
 
         obj = null;
         return false;
@@ -55,13 +58,31 @@ public abstract class IdMonoBehaviour<T, I> : MonoBehaviour where T : struct whe
 
     public void Register(T id)
     {
+        if (!id.Equals(default(T)) && indexToObject.TryGetValue(id, out var existing) &&
+            existing != null && !ReferenceEquals(existing, this))
+            throw new InvalidOperationException($"Duplicate {typeof(I).Name} network ID: {id}");
+        Unregister();
         _netId = id;
-        indexToObject[id] = this;
+        if (!id.Equals(default(T)))
+        {
+            idPool.ReserveId(id);
+            indexToObject[id] = this;
+        }
+    }
+
+    private void Unregister()
+    {
+        if (!_netId.Equals(default(T)) && indexToObject.TryGetValue(_netId, out var existing) && ReferenceEquals(existing, this))
+        {
+            indexToObject.Remove(_netId);
+            idPool.ReleaseId(_netId);
+        }
+        _netId = default;
     }
 
     protected virtual void OnDestroy()
     {
-        idPool.ReleaseId(NetId);
+        Unregister();
         if (!UnloadWatcher.isUnloading)
             return;
         idPool.Reset();

@@ -38,29 +38,8 @@ public struct PlayerItemSaveData
     public bool InLockedSlot { get; set; }
     public bool IsDropped { get; set; }
 
-    private Vector3 _position;
-    public Vector3 Position
-    {
-        get
-        {
-            if (_position == null || _position == default)
-                _position = new Vector3(ItemPositionX, ItemPositionY, ItemPositionZ);
-
-            return _position;
-        }
-    }
-
-    private Quaternion _rotation;
-    public Quaternion Rotation
-    {
-        get
-        {
-            if (_rotation == null || _rotation == default)
-                _rotation = new Quaternion(ItemRotationX, ItemRotationY, ItemRotationZ, ItemRotationW);
-
-            return _rotation;
-        }
-    }
+    public Vector3 Position => new Vector3(ItemPositionX, ItemPositionY, ItemPositionZ);
+    public Quaternion Rotation => new Quaternion(ItemRotationX, ItemRotationY, ItemRotationZ, ItemRotationW);
 
     public static void Serialize(NetDataWriter writer, PlayerItemSaveData data)
     {

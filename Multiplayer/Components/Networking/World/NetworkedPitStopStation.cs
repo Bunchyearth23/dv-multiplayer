@@ -239,17 +239,75 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
         return keyValuePairs;
     }
 
+    private readonly Dictionary<int, ServerPlayer> interactionOwners = new();
+
     public bool ValidateInteraction(CommonPitStopInteractionPacket packet, ServerPlayer player)
     {
-        //todo: implement validation code (player distance, player interacting, etc.)
+        if (player == null || !initialised || Station?.pitstop?.carList == null ||
+            !Enum.IsDefined(typeof(PitStopStationInteractionType), packet.InteractionType) ||
+            !ServerActionPolicy.Finite(packet.Value)) return false;
+        var action = packet.InteractionType;
+        if (action == PitStopStationInteractionType.Reject || action == PitStopStationInteractionType.ResourceUpdate)
+            return false; // Resource totals are produced by the server simulation.
+        int key;
+        Transform target;
+        bool release;
+        if (action == PitStopStationInteractionType.LeverState)
+        {
+            if (!resourceTypeToLocoResourceModule.ContainsKey((ResourceType)packet.ResourceType) ||
+                !leverLookup.TryGetValue((ResourceType)packet.ResourceType, out var lever) || lever == null ||
+                packet.Value < -1 || packet.Value > 1 || packet.Value != Math.Truncate(packet.Value)) return false;
+            key = packet.ResourceType;
+            target = lever.transform;
+            release = packet.Value == 0;
+        }
+        else if (action == PitStopStationInteractionType.CarSelectorGrab ||
+            action == PitStopStationInteractionType.CarSelectorUngrab || action == PitStopStationInteractionType.CarSelection)
+        {
+            if (carSelectorGrab == null) return false;
+            if (action != PitStopStationInteractionType.CarSelectorGrab &&
+                !ServerActionPolicy.Index(packet.Value, Station.pitstop.carList.Count)) return false;
+            key = -1;
+            target = carSelectorGrab.transform;
+            release = action == PitStopStationInteractionType.CarSelectorUngrab;
+        }
+        else
+        {
+            if (faucetPositionerGrab == null || faucetCrankSteppedJoint == null) return false;
+            if (action != PitStopStationInteractionType.FaucetGrab &&
+                !ServerActionPolicy.Index(packet.Value, faucetCrankSteppedJoint.notches)) return false;
+            key = -2;
+            target = faucetPositionerGrab.transform;
+            release = action == PitStopStationInteractionType.FaucetUngrab;
+        }
+        interactionOwners.TryGetValue(key, out var owner);
+        if (owner != null && owner != player) return false;
+        // An owner can release after moving away or after a permission change.
+        if (!(release && owner == player) &&
+            (!NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+             !ServerActionPolicy.InRange((player.WorldPosition - target.position).sqrMagnitude, 10f))) return false;
+        if (release) interactionOwners.Remove(key);
+        else if (action != PitStopStationInteractionType.CarSelection && action != PitStopStationInteractionType.FaucetPosition)
+            interactionOwners[key] = player;
         return true;
     }
 
-    //todo: update when merged with ModAPI branch
     public void OnPlayerDisconnect(ServerPlayer player)
     {
-        //todo: when a player disconnects, if they are interacting with a lever, cancel the interaction
-        //Multiplayer.LogWarning($"OnPlayerDisconnect()");
+        foreach (var key in interactionOwners.Where(pair => pair.Value == player).Select(pair => pair.Key).ToArray())
+        {
+            interactionOwners.Remove(key);
+            var packet = new CommonPitStopInteractionPacket { NetId = NetId };
+            if (key == -1) { packet.InteractionType = PitStopStationInteractionType.CarSelectorUngrab; packet.Value = Station.pitstop.SelectedIndex; }
+            else if (key == -2) { packet.InteractionType = PitStopStationInteractionType.FaucetUngrab; packet.Value = faucetCrankSteppedJoint.currentNotch; }
+            else { packet.InteractionType = PitStopStationInteractionType.LeverState; packet.ResourceType = key; packet.Value = 0; }
+            bool previousProcessing = processingAsHost;
+            processingAsHost = true;
+            try { ProcessInteractionPacketAsClient(packet); }
+            finally { processingAsHost = previousProcessing; }
+            foreach (var recipient in CullingManager.ActivePlayers.Where(p => p != player).ToArray())
+                NetworkLifecycle.Instance.Server.SendPitStopInteractionPacket(recipient, packet);
+        }
     }
 
     public void OnPlayerEnteredActivationRegion(ServerPlayer player)
@@ -296,8 +354,7 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
 
     public void OnPlayerEnteredCullingRegion(ServerPlayer player)
     {
-        //todo: when a player leaves the region cancel any interactions
-        //Multiplayer.LogWarning($"OnPlayerDisconnect()");
+        OnPlayerDisconnect(player);
     }
 
     public void ProcessInteractionPacketAsHost(CommonPitStopInteractionPacket packet, ServerPlayer senderPlayer)
@@ -310,12 +367,15 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
             OnCarPitStopEntered();
 
             processingAsHost = true;
+            try
+            {
             if (senderPlayer.PlayerId != NetworkLifecycle.Instance.Server.SelfId)
             {
                 Multiplayer.LogDebug(() => $"NetworkedPitStopStation.ProcessInteractionPacketAsHost() ProcessPacketAsClient()");
                 ProcessInteractionPacketAsClient(packet);
             }
-            processingAsHost = false;
+            }
+            finally { processingAsHost = false; }
 
             // Send to all other players
             foreach (var player in CullingManager.ActivePlayers)
@@ -339,6 +399,7 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
                     InteractionType = PitStopStationInteractionType.Reject
                 }
             );
+            if (initialised && Station?.pitstop?.carList != null) OnPlayerEnteredActivationRegion(senderPlayer);
         }
     }
 
@@ -1029,6 +1090,15 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
     /// <param name="packet">The packet containing interaction data.</param>
     public void ProcessInteractionPacketAsClient(CommonPitStopInteractionPacket packet)
     {
+        if (packet.InteractionType == PitStopStationInteractionType.Reject)
+        {
+            carSelectorGrab?.ForceEndInteraction();
+            faucetPositionerGrab?.ForceEndInteraction();
+            foreach (var control in leverLookup.Values) control?.ForceEndInteraction();
+            foreach (var key in isResourceGrabbedDict.Keys.ToArray()) isResourceGrabbedDict[key] = false;
+            Multiplayer.LogWarning("Pit stop interaction refused by server; restoring authoritative state.");
+            return;
+        }
         LeverBase grab = null;
         RotaryAmplitudeChecker amplitudeChecker = null;
         LeverBase lever = null;
@@ -1189,3 +1259,4 @@ public class NetworkedPitStopStation : IdMonoBehaviour<ushort, NetworkedPitStopS
     }
     #endregion
 }
+

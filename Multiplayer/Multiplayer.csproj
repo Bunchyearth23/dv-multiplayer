@@ -113,7 +113,7 @@
             <VersionNumber Include="$(InformationalVersion.Split('+')[0] )" />
         </ItemGroup>
     </Target>
-    <Target Name="PostBuild" AfterTargets="PostBuildEvent" DependsOnTargets="PostBuildMacros">
+    <Target Name="PostBuild" AfterTargets="PostBuildEvent" DependsOnTargets="PostBuildMacros" Condition="'$(SkipMultiplayerPostBuild)' != 'true'">
         <!-- Sign Assemblies if in 'Release' -->
         <Exec Condition="$(ConfigurationName) == 'Release' AND $(Cert-Thumb) != ''" Command="&quot;$(SignToolPath)SignTool.exe&quot; sign /sha1 $(Cert-Thumb) /fd SHA256 /t http://timestamp.sectigo.com &quot;$(TargetPath)&quot; &quot;$(OutDir)/LiteNetLib.dll&quot;" />
         <!-- Copy to build folder -->

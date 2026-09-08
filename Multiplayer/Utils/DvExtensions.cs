@@ -143,6 +143,9 @@ public static class DvExtensions
 
     public static bool PlayerCanReach(this Transform item, ServerPlayer player, float extraRange = 0f)
     {
+        if (item == null || player == null) return false;
+        var offset = player.WorldPosition - item.position;
+        if (!global::Multiplayer.Networking.Data.ServerActionPolicy.Finite(offset.sqrMagnitude)) return false;
         float reachRange = AKeyboardInput.XZ_SQR_REACH_RANGE + GrabberRaycasterDV.FPS_INTERACTION_RANGE_SQR + (extraRange * extraRange);
 
         var delta = player.WorldPosition - item.transform.position;

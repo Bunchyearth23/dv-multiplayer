@@ -1,4 +1,5 @@
 using DV;
+using DV.Booklets;
 using DV.Customization;
 using DV.Customization.Paint;
 using DV.Garages;
@@ -7,6 +8,7 @@ using DV.LocoRestoration;
 using DV.Logic.Job;
 using DV.Scenarios.Common;
 using DV.ServicePenalty;
+using DV.ServicePenalty.UI;
 using DV.ThingTypes;
 using DV.WeatherSystem;
 using Humanizer;
@@ -50,7 +52,7 @@ using UnityEngine;
 
 namespace Multiplayer.Networking.Managers.Server;
 
-public class NetworkServer : NetworkManager
+public partial class NetworkServer : NetworkManager
 {
     private const int WEATHER_UPDATE_INTERVAL = 30; //seconds
     private const int HIGH_PING_LOG_INTERVAL = 60; //only log high ping once every 60 seconds per player
@@ -61,6 +63,7 @@ public class NetworkServer : NetworkManager
     protected override string LogPrefix => "[Server]";
 
     private readonly Queue<ITransportPeer> joinQueue = new();   //Queue for players attempting to join while server is loading
+    private readonly ShopPurchaseLedger shopPurchases = new();
 
     private readonly Dictionary<byte, ServerPlayer> serverPlayers = [];             //player Id to ServerPlayer mapping
     private readonly Dictionary<byte, ITransportPeer> peers = [];                   //player Id to peer mapping
@@ -143,31 +146,44 @@ public class NetworkServer : NetworkManager
         return base.Start(port);
     }
 
+    private bool hasStopped;
+
     public override void Stop()
     {
-        Log($"Stopping server...");
+        if (hasStopped) return;
+        hasStopped = true;
+        Log("Stopping server...");
         WorldStreamingInit.LoadingFinished -= OnLoaded;
-
+        NetworkLifecycle.Instance.OnTick -= OnTick;
+        IsLoaded = false;
+        void CleanupStep(string name, Action action)
+        {
+            try { action(); }
+            catch (Exception ex) { LogError($"Server shutdown failed ({name}): {ex}"); }
+        }
+        CleanupStep("fast travel cancellation", () => fastTravelRoutine?.Dispose());
+        CleanupStep("inventory restoration cancellation", () => UnityEngine.Object.FindObjectOfType<NetworkedItemManager>()?.CancelInventoryRestores());
+        if (WorldStreamingInit.isLoaded)
+            CleanupStep("final inventory capture", () => SaveGameManager.Instance.UpdateInternalData());
         if (lobbyServerManager != null)
         {
-            lobbyServerManager.RemoveFromLobbyServer();
-            UnityEngine.Object.Destroy(lobbyServerManager);
+            CleanupStep("lobby removal", () => lobbyServerManager.RemoveFromLobbyServer());
+            CleanupStep("lobby object", () => UnityEngine.Object.Destroy(lobbyServerManager));
         }
-
-        //Alert all clients (except host)
-        var packet = WritePacket(new ClientboundDisconnectPacket());
-        foreach (var peer in peers.Values)
-        {
+        // Callbacks can remove players/peers and serialize their own packets during Disconnect.
+        var packet = new NetDataWriter();
+        netPacketProcessor.Write(packet, new ClientboundDisconnectPacket());
+        foreach (var peer in peers.Values.ToArray())
             if (peer != SelfPeer)
-                peer?.Disconnect(packet);
-        }
-
-        //Reset player ID pool
-        foreach (var player in serverPlayers.Values)
-            player.Dispose();
-
-        NetworkLifecycle.Instance.OnTick -= OnTick;
-
+                CleanupStep("peer disconnect", () => peer?.Disconnect(packet));
+        foreach (var player in serverPlayers.Values.ToArray())
+            CleanupStep("player disposal", player.Dispose);
+        serverPlayers.Clear();
+        peers.Clear();
+        peerToPlayer.Clear();
+        PlayerWrapperCache.Clear();
+        joinQueue.Clear();
+        PlayerDisconnected = null;
         base.Stop();
     }
 
@@ -181,6 +197,7 @@ public class NetworkServer : NetworkManager
 
         // World sync
         netPacketProcessor.SubscribeReusable<ServerboundLoadStateUpdatePacket, ITransportPeer>(OnServerboundLoadStateUpdatePacket);
+        netPacketProcessor.SubscribeReusable<ServerboundWorldItemRecoveryPacket, ITransportPeer>(OnWorldItemRecovery);
         netPacketProcessor.SubscribeReusable<ServerboundTimeAdvancePacket, ITransportPeer>(OnServerboundTimeAdvancePacket);
 
         netPacketProcessor.SubscribeReusable<CommonChangeJunctionPacket, ITransportPeer>(OnCommonChangeJunctionPacket);
@@ -197,11 +214,14 @@ public class NetworkServer : NetworkManager
         // Player
         netPacketProcessor.SubscribeReusable<ServerboundPlayerPositionPacket, ITransportPeer>(OnServerboundPlayerPositionPacket);
         netPacketProcessor.SubscribeReusable<ServerboundLicensePurchaseRequestPacket, ITransportPeer>(OnServerboundLicensePurchaseRequestPacket);
+        netPacketProcessor.SubscribeReusable<ServerboundShopQuoteRequestPacket, ITransportPeer>(OnServerboundShopQuoteRequestPacket);
+        netPacketProcessor.SubscribeReusable<ServerboundShopPurchaseRequestPacket, ITransportPeer>(OnServerboundShopPurchaseRequestPacket);
         netPacketProcessor.SubscribeReusable<ServerboundPlayerPreferenceUpdatePacket, ITransportPeer>(OnServerboundPlayerPreferenceUpdatePacket);
 
 
         // Train
-        netPacketProcessor.SubscribeReusable<ServerboundTrainSyncRequestPacket>(OnServerboundTrainSyncRequestPacket);
+        netPacketProcessor.SubscribeReusable<ServerboundTrainSyncRequestPacket, ITransportPeer>(OnServerboundTrainSyncRequestPacket);
+        netPacketProcessor.SubscribeReusable<ServerboundFastTravelPacket, ITransportPeer>(OnFastTravelRequest);
         netPacketProcessor.SubscribeReusable<ServerboundTenderCoalPacket, ITransportPeer>(OnServerboundTenderCoalPacket);
         netPacketProcessor.SubscribeReusable<CommonTrainPortsPacket, ITransportPeer>(OnCommonTrainPortsPacket);
         netPacketProcessor.SubscribeReusable<CommonTrainFusesPacket, ITransportPeer>(OnCommonTrainFusesPacket);
@@ -333,18 +353,28 @@ public class NetworkServer : NetworkManager
     {
         LogDebug(() => $"OnPeerDisconnected({peer.Id})");
         if (!peerToPlayer.TryGetValue(peer, out ServerPlayer player))
+        {
             LogWarning($"Peer {peer.GetType()}, peerId: {peer.Id} disconnected but no player found");
-        else
-            Log($"Player {player?.Username} disconnected: {disconnectReason}");
+            return;
+        }
+        Log($"Player {player.Username} disconnected: {disconnectReason}");
 
+        // Retire the peer first so reentrant disconnect notifications cannot run cleanup twice.
+        // Keep the player in serverPlayers until the save has captured their final state.
+        peerToPlayer.Remove(peer);
+        void CleanupStep(string step, Action action)
+        {
+            try { action(); }
+            catch (Exception ex) { LogError($"Disconnect cleanup failed ({step}, player {player.PlayerId}): {ex}"); }
+        }
         if (WorldStreamingInit.isLoaded)
-            SaveGameManager.Instance.UpdateInternalData();
+            CleanupStep("save", () => SaveGameManager.Instance.UpdateInternalData());
 
         serverPlayers.Remove(player.PlayerId);
         peers.Remove(player.PlayerId);
-        peerToPlayer.Remove(peer);
+        PlayerWrapperCache.Remove(player.PlayerId);
 
-        SendPacketToAll
+        CleanupStep("notify clients", () => SendPacketToAll
         (
             new ClientboundPlayerDisconnectPacket
             {
@@ -352,11 +382,14 @@ public class NetworkServer : NetworkManager
             },
             DeliveryMethod.ReliableUnordered,
             PlayerLoadingState.Complete
-        );
+        ));
 
-        PlayerDisconnected?.Invoke(player);
+        var subscribers = PlayerDisconnected?.GetInvocationList();
+        if (subscribers != null)
+            foreach (Action<ServerPlayer> subscriber in subscribers)
+                CleanupStep($"subscriber {subscriber.Method.DeclaringType?.Name}.{subscriber.Method.Name}", () => subscriber(player));
 
-        player?.Dispose();
+        CleanupStep("dispose", player.Dispose);
     }
 
     public override void OnNetworkLatencyUpdate(ITransportPeer peer, int latency)
@@ -973,8 +1006,12 @@ public class NetworkServer : NetworkManager
 
         if (player.Peer != null && player.Peer != SelfPeer)
         {
-            SendNetSerializablePacket(player.Peer, new CommonItemChangePacket { Items = items },
-                DeliveryMethod.ReliableOrdered);
+            for (int offset = 0; offset < items.Count; offset += NetworkedItemManager.MaxServerBatchItems)
+            {
+                int count = Math.Min(NetworkedItemManager.MaxServerBatchItems, items.Count - offset);
+                SendNetSerializablePacket(player.Peer,
+                    new CommonItemChangePacket { Items = items.GetRange(offset, count) }, DeliveryMethod.ReliableOrdered);
+            }
         }
     }
 
@@ -1109,13 +1146,14 @@ public class NetworkServer : NetworkManager
             return;
         }
 
-        if (packet.BuildVersion != MainMenuControllerPatch.MenuProvider.BuildVersionString)
+        string expectedBuild = ProtocolCompatibility.HandshakeBuild(MainMenuControllerPatch.MenuProvider.BuildVersionString);
+        if (packet.BuildVersion != expectedBuild)
         {
-            LogWarning($"Denied login to incorrect game version! Got: {packet.BuildVersion}, expected: {MainMenuControllerPatch.MenuProvider.BuildVersionString}");
+            LogWarning($"Denied login to incompatible game/protocol version! Got: {packet.BuildVersion}, expected: {expectedBuild}");
             ClientboundLoginResponsePacket denyPacket = new()
             {
                 ReasonKey = Locale.DISCONN_REASON__GAME_VERSION_KEY,
-                ReasonArgs = [MainMenuControllerPatch.MenuProvider.BuildVersionString, packet.BuildVersion.ToString()]
+                ReasonArgs = [expectedBuild, packet.BuildVersion?.ToString() ?? ""]
             };
             request.Reject(WritePacket(denyPacket));
             return;
@@ -1198,6 +1236,24 @@ public class NetworkServer : NetworkManager
         SendPacket(peer, acceptPacket, DeliveryMethod.ReliableUnordered);
     }
 
+    private void OnWorldItemRecovery(ServerboundWorldItemRecoveryPacket packet, ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(peer, out var player) || player.LoadingState != PlayerLoadingState.ReadyForItems ||
+            player.InitialWorldItems == null || packet.ItemIds == null || packet.ItemIds.Length == 0 ||
+            packet.ItemIds.Length > LoadingRecovery.MaxBatch || packet.ItemIds.Distinct().Count() != packet.ItemIds.Length ||
+            packet.ItemIds.Any(id => !player.InitialWorldItems.Contains(id))) return;
+        if (!player.WorldItemRecovery.TryTake(packet.ItemIds, out var ids)) return;
+        var updates = new List<ItemUpdateData>();
+        foreach (var id in ids)
+        {
+            if (NetworkedItem.TryGet(id, out var item) && item != null && item.CanApplySnapshot)
+                updates.Add(item.CreateUpdateData(ItemUpdateData.ItemUpdateType.Create));
+            else
+                updates.Add(new ItemUpdateData { ItemNetId = id, UpdateType = ItemUpdateData.ItemUpdateType.Destroy });
+        }
+        SendItemsChangePacket(updates.Where(item => item != null).ToList(), player);
+    }
+
     private void OnServerboundLoadStateUpdatePacket(ServerboundLoadStateUpdatePacket packet, ITransportPeer peer)
     {
         LogDebug(() => $"OnServerboundLoadStateUpdatePacket from peerId: {peer.Id}, loadState: {packet.LoadState}");
@@ -1211,6 +1267,13 @@ public class NetworkServer : NetworkManager
         if (player.LoadingState >= packet.LoadState)
         {
             LogWarning($"Player {player.Username} reported load state {packet.LoadState}, but is currently at load state {player.LoadingState}!");
+            KickPlayer(player);
+            return;
+        }
+        if (packet.LoadState > PlayerLoadingState.ReadyForItems && !NetworkLifecycle.Instance.IsHost(player) &&
+            !player.InventoryRestoreComplete)
+        {
+            LogWarning($"Player {player.Username} skipped inventory restoration.");
             KickPlayer(player);
             return;
         }
@@ -1310,12 +1373,31 @@ public class NetworkServer : NetworkManager
                 break;
 
             case PlayerLoadingState.ReadyForItems:
-                // Send Inventory and world items
+                NetworkedItemManager.Instance.RestorePlayerInventory(player,
+                    items =>
+                    {
+                        SendPacket(peer, new ClientboundInventoryRestorePacket { Items = items }, DeliveryMethod.ReliableOrdered);
+                        var worldItems = NetworkedItemManager.Instance.CaptureInitialWorldItems(player);
+                        player.InitialWorldItems = new HashSet<ushort>(worldItems.Select(item => item.ItemNetId));
+                        SendItemsChangePacket(worldItems, player);
+                        SendPacket(peer, new ClientboundWorldItemManifestPacket { ItemIds = player.InitialWorldItems.ToArray() }, DeliveryMethod.ReliableOrdered);
+                    },
+                    error =>
+                    {
+                        LogError($"Inventory restoration failed for {player.Username}: {error}");
+                        SendPacket(peer, new ClientboundInventoryRestorePacket
+                        {
+                            Items = Array.Empty<PlayerItemSaveData>(), Error = error.Message
+                        }, DeliveryMethod.ReliableOrdered);
+                    });
 
                 break;
 
             case PlayerLoadingState.ReadyForJobs:
+                // This transition acknowledges application of the initial world item manifest.
+                player.InitialWorldItems = null;
 
+                var jobManifest = new List<ushort>();
                 // Send Job Data
                 foreach (StationController station in StationController.allStations)
                 {
@@ -1329,13 +1411,15 @@ public class NetworkServer : NetworkManager
                         for (int i = 0; i < jobs.Length; i++)
                         {
                             SendJobsCreatePacket(netStation, [jobs[i]], peer);
+                            jobManifest.Add(jobs[i].NetId);
                         }
                     }
                     else
                     {
-                        LogError($"Sending job packets... Failed to get NetworkedStation from station {station?.stationInfo?.Name}");
+                        throw new InvalidOperationException($"Sending job packets... Failed to get NetworkedStation from station {station?.stationInfo?.Name}");
                     }
                 }
+                SendPacket(peer, new ClientboundJobManifestPacket { JobIds = jobManifest.ToArray() }, DeliveryMethod.ReliableOrdered);
                 break;
 
             case PlayerLoadingState.ReadyForTiles:
@@ -1458,9 +1542,26 @@ public class NetworkServer : NetworkManager
             SendPlayerPreferencesUpdate(player, preferences);
     }
 
+    public bool AllowsAction(ServerPlayer player, bool enabled) => player != null &&
+        ServerActionPolicy.Allowed(player.LoadingState == PlayerLoadingState.Complete,
+            player.PlayerId == SelfId, enabled);
+
+    private void RejectAction(ITransportPeer peer, string action, string reason)
+    {
+        SendPacket(peer, new CommonChatPacket { message = $"{action} refused: {reason}." }, DeliveryMethod.ReliableOrdered);
+    }
+
     private void OnServerboundTimeAdvancePacket(ServerboundTimeAdvancePacket packet, ITransportPeer peer)
     {
 
+        if (!TryGetServerPlayer(peer, out var sender) ||
+            !AllowsAction(sender, Multiplayer.Settings.AllowClientTimeAdvance) ||
+            !ServerActionPolicy.Finite(packet.amountOfTimeToSkipInSeconds) || packet.amountOfTimeToSkipInSeconds < 0 ||
+            packet.amountOfTimeToSkipInSeconds > 86400)
+        {
+            RejectAction(peer, "Time advance", "not ready, permission denied or invalid duration");
+            return;
+        }
         if (!fastTravelAdvancesTime)
         {
             TryGetServerPlayer(peer, out ServerPlayer player);
@@ -1482,11 +1583,26 @@ public class NetworkServer : NetworkManager
 
     private void OnCommonChangeJunctionPacket(CommonChangeJunctionPacket packet, ITransportPeer peer)
     {
+        if (!TryGetServerPlayer(peer, out var player) || !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            !NetworkedJunction.Get(packet.NetId, out var junction) || junction?.Junction == null ||
+            !Enum.IsDefined(typeof(Junction.SwitchMode), (Junction.SwitchMode)packet.Mode) || packet.SelectedBranch > 1)
+        {
+            RejectAction(peer, "Junction", "not ready, permission denied or invalid target/state");
+            return;
+        }
+        // Map/radio switching is intentionally available remotely.
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForWorldState, peer);
     }
 
     private void OnCommonRotateTurntablePacket(CommonRotateTurntablePacket packet, ITransportPeer peer)
     {
+        if (!TryGetServerPlayer(peer, out var player) || !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            !NetworkedTurntable.Get(packet.NetId, out var turntable) || turntable?.TurntableRailTrack == null ||
+            !ServerActionPolicy.Finite(packet.rotation))
+        {
+            RejectAction(peer, "Turntable", "not ready, permission denied or invalid target/rotation");
+            return;
+        }
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForWorldState, peer);
     }
 
@@ -1692,16 +1808,35 @@ public class NetworkServer : NetworkManager
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
-    private void OnServerboundTrainSyncRequestPacket(ServerboundTrainSyncRequestPacket packet)
+    private void OnServerboundTrainSyncRequestPacket(ServerboundTrainSyncRequestPacket packet, ITransportPeer peer)
     {
+        if (packet.NetId == 0 || !TryGetServerPlayer(peer, out var player) ||
+            player.LoadingState < PlayerLoadingState.ReadyForTrainSets) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (now < player.NextTrainRepairAt) return;
+        player.NextTrainRepairAt = now + System.Diagnostics.Stopwatch.Frequency;
         if (NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
-            networkedTrainCar.Server_DirtyAllState();
+        {
+            var cars = networkedTrainCar.TrainCar.trainset.cars;
+            if (cars.Any(c => c == null || c.IsTeleporting || IsFastTravelCar(c.GetNetId())) || cars.Count > TrainCompositionPolicy.MaxCars) return;
+            SendPacket(peer, new ClientboundTrainRepairPacket { Parts = TrainsetSpawnPart.FromTrainSet(cars) }, DeliveryMethod.ReliableOrdered);
+            foreach (var car in cars)
+                if (car.TryNetworked(out NetworkedTrainCar netCar)) netCar.Server_DirtyAllState();
+        }
+        else
+            SendPacket(peer, new ClientboundDestroyTrainCarPacket { NetId = packet.NetId }, DeliveryMethod.ReliableOrdered);
     }
 
     private void OnServerboundTrainDeleteRequestPacket(ServerboundTrainDeleteRequestPacket packet, ITransportPeer peer)
     {
+        if (IsFastTravelCar(packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientTrainManagement))
+        {
+            RejectAction(peer, "Train management", "not ready or permission denied");
+            return;
+        }
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
 
@@ -1746,8 +1881,14 @@ public class NetworkServer : NetworkManager
 
     private void OnServerboundTrainRerailRequestPacket(ServerboundTrainRerailRequestPacket packet, ITransportPeer peer)
     {
+        if (IsFastTravelCar(packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientTrainManagement))
+        {
+            RejectAction(peer, "Train management", "not ready or permission denied");
+            return;
+        }
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
         if (!NetworkedRailTrack.TryGet(packet.TrackId, out NetworkedRailTrack networkedRailTrack))
@@ -1755,6 +1896,14 @@ public class NetworkServer : NetworkManager
 
         TrainCar trainCar = networkedTrainCar.TrainCar;
         Vector3 position = packet.Position + WorldMover.currentMove;
+        if (!ServerActionPolicy.InRange((player.WorldPosition - position).sqrMagnitude, CommsRadioCarSpawner.SIGNAL_RANGE) ||
+            !ServerActionPolicy.InRange((player.WorldPosition - trainCar.transform.position).sqrMagnitude, CommsRadioCarSpawner.SIGNAL_RANGE) ||
+            !ServerActionPolicy.Finite(packet.Forward.sqrMagnitude) || packet.Forward.sqrMagnitude < 0.5f || packet.Forward.sqrMagnitude > 1.5f ||
+            networkedTrainCar.HasPlayers())
+        {
+            RejectAction(peer, "Rerail", "invalid direction, occupied train or out of radio range");
+            return;
+        }
 
         //Check if player is a Newbie (currently shared with all players)
         float cost = TutorialHelper.InRestrictedMode || rerailController != null && rerailController.isPlayerNewbie ? 0f :
@@ -1773,6 +1922,11 @@ public class NetworkServer : NetworkManager
     {
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientTrainManagement))
+        {
+            RejectAction(peer, "Train management", "not ready or permission denied");
+            return;
+        }
 
         if (!NetworkedRailTrack.TryGet(packet.TrackNetId, out NetworkedRailTrack networkedRailTrack) || networkedRailTrack == null)
         {
@@ -1808,7 +1962,7 @@ public class NetworkServer : NetworkManager
 
         // Check player is within range of the spawn point
         float playerDistanceToSpawn = (player.AbsoluteWorldPosition - (Vector3)spawnPoint.position).magnitude;
-        if (playerDistanceToSpawn > CommsRadioCarSpawner.SIGNAL_RANGE && !Mathf.Approximately(playerDistanceToSpawn, CommsRadioCarSpawner.SIGNAL_RANGE))
+        if (!ServerActionPolicy.InRange(playerDistanceToSpawn * playerDistanceToSpawn, CommsRadioCarSpawner.SIGNAL_RANGE))
         {
             LogWarning($"{player.Username} tried to spawn a train {playerDistanceToSpawn:F2}m away (max: {CommsRadioCarSpawner.SIGNAL_RANGE}m)");
             return;
@@ -1827,19 +1981,42 @@ public class NetworkServer : NetworkManager
         var rpcResponse = new SpawnResponse() { Response = SpawnResponse.ResponseType.InUse };
 
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
+        {
+            SendRpcResponse(packet.TicketId, new SpawnResponse { Response = SpawnResponse.ResponseType.NotReady }, peer);
             return;
+        }
+
+        void Respond(SpawnResponse.ResponseType response)
+        {
+            rpcResponse.Response = response;
+            SendRpcResponse(packet.TicketId, rpcResponse, peer);
+        }
+
+        if (player.LoadingState != PlayerLoadingState.Complete)
+        {
+            Respond(SpawnResponse.ResponseType.NotReady);
+            return;
+        }
+
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientTrainManagement))
+        {
+            Respond(SpawnResponse.ResponseType.InsufficientPermissions);
+            return;
+        }
 
         LogDebug(() => $"OnServerboundWorkTrainRequestPacket() from : {player.Username}, trackNetId: {packet.TrackNetId}, liveryId: {packet.LiveryId}, index: {packet.Index}, withTrackDirection: {packet.WithTrackDirection}");
 
         if (!NetworkedRailTrack.TryGet(packet.TrackNetId, out NetworkedRailTrack networkedRailTrack) || networkedRailTrack == null)
         {
             LogWarning($"{player.Username} tried to request a work train on invalid track netId: {packet.TrackNetId}");
+            Respond(SpawnResponse.ResponseType.InvalidRequest);
             return;
         }
 
         if (!Components.TrainComponentLookup.Instance.LiveryFromId(packet.LiveryId, out TrainCarLivery livery) || livery == null || livery.prefab == null)
         {
             LogWarning($"{player.Username} tried to request a work train with invalid livery Id: {packet.LiveryId}");
+            Respond(SpawnResponse.ResponseType.InvalidRequest);
             return;
         }
 
@@ -1848,6 +2025,7 @@ public class NetworkServer : NetworkManager
         if (packet.Index < 0 || packet.Index >= kinked.Length)
         {
             LogWarning($"{player.Username} tried to spawn a car at an invalid index: {packet.Index}");
+            Respond(SpawnResponse.ResponseType.InvalidRequest);
             return;
         }
 
@@ -1860,14 +2038,16 @@ public class NetworkServer : NetworkManager
         if (!CarSpawner.IsThereSpaceForCarOnPoint(spawnPoint, startPoint, endpoint, carBounds.extents))
         {
             LogWarning($"{player.Username} tried to spawn a car, but there's no room on the track");
+            Respond(SpawnResponse.ResponseType.NoSpace);
             return;
         }
 
         // Check player is within range of the spawn point
         float playerDistanceToSpawn = (player.AbsoluteWorldPosition - (Vector3)spawnPoint.position).magnitude;
-        if (playerDistanceToSpawn > CommsRadioCarSpawner.SIGNAL_RANGE && !Mathf.Approximately(playerDistanceToSpawn, CommsRadioCarSpawner.SIGNAL_RANGE))
+        if (!ServerActionPolicy.InRange(playerDistanceToSpawn * playerDistanceToSpawn, CommsRadioCarSpawner.SIGNAL_RANGE))
         {
             LogWarning($"{player.Username} tried to spawn a train {playerDistanceToSpawn:F2}m away (max: {CommsRadioCarSpawner.SIGNAL_RANGE}m)");
+            Respond(SpawnResponse.ResponseType.OutOfRange);
             return;
         }
 
@@ -1895,44 +2075,164 @@ public class NetworkServer : NetworkManager
             else
             {
                 LogWarning($"{player.Username} tried to request a work train of {livery.id} but NetworkedTrainCar not found");
+                Respond(SpawnResponse.ResponseType.ServerError);
                 return;
             }
         }
 
+        float chargedPrice = 0;
         if (isGarageCar)
         {
             var price = Mathf.Min(selectedGarageSpawner.garageType.summonPrice, Globals.G.GameParams.WorkTrainSummonMaxPrice);
-            if (!Inventory.Instance.RemoveMoney(price))
+            try
             {
-                LogWarning($"{player.Username} tried to request a work train without enough money to do so!");
-                rpcResponse.Response = SpawnResponse.ResponseType.InsufficientFunds;
-                SendRpcResponse(packet.TicketId, rpcResponse, peer);
-
+                chargedPrice = price; // RemoveMoney mutates before its event callbacks.
+                if (!Inventory.Instance.RemoveMoney(price))
+                {
+                    chargedPrice = 0;
+                    LogWarning($"{player.Username} tried to request a work train without enough money to do so!");
+                    Respond(SpawnResponse.ResponseType.InsufficientFunds);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError($"Work train debit failed for {player.Username}: {ex}");
+                try { if (chargedPrice > 0) Inventory.Instance.AddMoney(chargedPrice); }
+                catch (Exception refundError) { LogError($"Work train debit compensation failed for {player.Username}: {refundError}"); }
+                Respond(SpawnResponse.ResponseType.ServerError);
                 return;
             }
         }
 
-        if (trainCar == null)
+        bool spawnedNew = trainCar == null;
+        try
         {
-            LogDebug(() => $"OnServerboundWorkTrainRequestPacket() {player.Username} tried to request a work train of {livery.id} but no existing car found, spawning new car");
-            trainCar = CarSpawner.Instance.SpawnCrewVehicle(livery, networkedRailTrack.RailTrack, (Vector3)spawnPoint.position, forward, selectedGarageSpawner);
-
-            SendSpawnTrainset([trainCar], true, true);
+            if (spawnedNew)
+            {
+                LogDebug(() => $"OnServerboundWorkTrainRequestPacket() {player.Username} tried to request a work train of {livery.id} but no existing car found, spawning new car");
+                trainCar = CarSpawner.Instance.SpawnCrewVehicle(livery, networkedRailTrack.RailTrack, (Vector3)spawnPoint.position, forward, selectedGarageSpawner);
+            }
+            else
+            {
+                // Checks passed, call the work train.
+                trainCar = CarSpawner.Instance.SpawnCrewVehicle(livery, networkedRailTrack.RailTrack, (Vector3)spawnPoint.position, forward, selectedGarageSpawner);
+                if (trainCar == null) throw new InvalidOperationException("Work train summon returned no car.");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            // Checks passed, call the work train
-            trainCar = CarSpawner.Instance.SpawnCrewVehicle(livery, networkedRailTrack.RailTrack, (Vector3)spawnPoint.position, forward, selectedGarageSpawner);
+            LogError($"Work train request failed for {player.Username}: {ex}");
+            if (chargedPrice > 0)
+            {
+                try { Inventory.Instance.AddMoney(chargedPrice); }
+                catch (Exception refundError)
+                {
+                    LogError($"Work train refund failed for {player.Username}: {refundError}");
+                }
+            }
+            Respond(SpawnResponse.ResponseType.ServerError);
+            return;
+        }
+
+        if (spawnedNew)
+        {
+            // The car now exists and the purchase is committed. A transient notification
+            // failure must not refund it and invite a duplicate retry.
+            try { SendSpawnTrainset([trainCar], true, true); }
+            catch (Exception ex) { LogError($"Work train spawned but its immediate notification failed: {ex}"); }
         }
 
         rpcResponse.Response = SpawnResponse.ResponseType.Success;
         SendRpcResponse(packet.TicketId, rpcResponse, peer);
     }
 
+    private void OnServerboundShopQuoteRequestPacket(ServerboundShopQuoteRequestPacket packet, ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(peer, out var player))
+        {
+            SendRpcResponse(packet.TicketId, new ShopQuoteResponse { RegisterNetId = packet.RegisterNetId, Status = ShopQuoteStatus.NotReady }, peer);
+            return;
+        }
+
+        var quote = new ShopQuote(ShopQuoteStatus.NotReady);
+        try
+        {
+            if (player.LoadingState == PlayerLoadingState.Complete)
+            {
+                quote = NetworkedCashRegisterWithModules.Get(packet.RegisterNetId, out var register) && register != null
+                    ? register.Server_QuoteShopCart(player, packet.ItemIds, packet.Quantities)
+                    : new ShopQuote(ShopQuoteStatus.InvalidShop);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogWarning($"Shop quote failed for register {packet.RegisterNetId}: {ex.Message}");
+            quote = new ShopQuote(ShopQuoteStatus.ServerError);
+        }
+
+        SendRpcResponse(packet.TicketId, new ShopQuoteResponse
+        {
+            RegisterNetId = packet.RegisterNetId,
+            Status = quote.Status,
+            Total = quote.Total,
+            FailedLine = quote.FailedLine
+        }, peer);
+    }
+
+    private void OnServerboundShopPurchaseRequestPacket(ServerboundShopPurchaseRequestPacket packet, ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(peer, out var player))
+        {
+            SendRpcResponse(packet.TicketId, new ShopPurchaseResponse { RegisterNetId = packet.RegisterNetId, OperationId = packet.OperationId, Status = ShopQuoteStatus.NotReady }, peer);
+            return;
+        }
+        ShopPurchaseBackend backend = null;
+        // Replay the recorded outcome before checking mutable world/player state.
+        var outcome = shopPurchases.Execute(player.Guid, packet.OperationId, packet.RegisterNetId,
+                packet.ItemIds, packet.Quantities,
+                () =>
+                {
+                    NetworkedCashRegisterWithModules.Get(packet.RegisterNetId, out var register);
+                    return backend = new ShopPurchaseBackend(register, player, packet.ItemIds, packet.Quantities);
+                });
+        if (outcome.Quote.Status == ShopQuoteStatus.Success && backend != null)
+            backend.NotifyCommitted();
+        if (outcome.RecoveryRequired)
+            LogError($"Shop purchase {packet.OperationId} requires recovery after failed compensation.");
+        SendRpcResponse(packet.TicketId, new ShopPurchaseResponse
+        {
+            RegisterNetId = packet.RegisterNetId, OperationId = packet.OperationId,
+            Status = outcome.Quote.Status, Total = outcome.Quote.Total,
+            FailedLine = outcome.Quote.FailedLine, RecoveryRequired = outcome.RecoveryRequired
+        }, peer);
+    }
+
     private void OnServerboundLicensePurchaseRequestPacket(ServerboundLicensePurchaseRequestPacket packet, ITransportPeer peer)
     {
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
+        {
+            SendRpcResponse(packet.TicketId, new LicensePurchaseResponse { Id = "<invalid>", IsJobLicense = packet.IsJobLicense, Status = LicensePurchaseStatus.NotReady }, peer);
             return;
+        }
+
+        string responseId = string.IsNullOrWhiteSpace(packet.Id) || packet.Id.Length > 256 ? "<invalid>" : packet.Id;
+        void Respond(LicensePurchaseStatus status) => SendRpcResponse(packet.TicketId, new LicensePurchaseResponse
+        {
+            Id = responseId, IsJobLicense = packet.IsJobLicense, Status = status
+        }, peer);
+
+        if (player.LoadingState != PlayerLoadingState.Complete)
+        {
+            Respond(LicensePurchaseStatus.NotReady);
+            return;
+        }
+
+        if (responseId == "<invalid>")
+        {
+            Respond(LicensePurchaseStatus.InvalidRequest);
+            return;
+        }
 
         JobLicenseType_v2 jobLicense = null;
         GeneralLicenseType_v2 generalLicense = null;
@@ -1940,9 +2240,47 @@ public class NetworkServer : NetworkManager
             ? (jobLicense = Globals.G.Types.jobLicenses.Find(l => l.id == packet.Id))?.price
             : (generalLicense = Globals.G.Types.generalLicenses.Find(l => l.id == packet.Id))?.price;
 
-        if (!price.HasValue)
+        if (!price.HasValue || float.IsNaN(price.Value) || float.IsInfinity(price.Value) || price.Value < 0f)
         {
             LogWarning($"{player.Username} tried to purchase an invalid {(packet.IsJobLicense ? "job" : "general")} license with id {packet.Id}!");
+            Respond(LicensePurchaseStatus.InvalidRequest);
+            return;
+        }
+
+        bool acquired = packet.IsJobLicense
+            ? LicenseManager.Instance.IsJobLicenseAcquired(jobLicense)
+            : LicenseManager.Instance.IsGeneralLicenseAcquired(generalLicense);
+        if (acquired)
+        {
+            // A lost response may retry after the first request committed.
+            Respond(LicensePurchaseStatus.Success);
+            return;
+        }
+
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientPurchases))
+        {
+            Respond(LicensePurchaseStatus.PermissionDenied);
+            return;
+        }
+
+        bool obtainable = packet.IsJobLicense
+            ? LicenseManager.Instance.IsJobLicenseObtainable(jobLicense)
+            : LicenseManager.Instance.IsGeneralLicenseObtainable(generalLicense);
+        if (!obtainable)
+        {
+            Respond(LicensePurchaseStatus.PrerequisiteMissing);
+            return;
+        }
+
+        var screen = Resources.FindObjectsOfTypeAll<CareerManagerLicensePayingScreen>()
+            .Where(candidate => candidate != null && candidate.gameObject.scene.IsValid() &&
+                candidate.licensePrinter != null && candidate.licensePrinter.spawnAnchor != null)
+            .OrderBy(candidate => (candidate.licensePrinter.spawnAnchor.position - player.WorldPosition).sqrMagnitude)
+            .FirstOrDefault();
+        if (screen == null || (screen.licensePrinter.spawnAnchor.position - player.WorldPosition).sqrMagnitude > 100f)
+        {
+            LogWarning($"{player.Username} tried to purchase a license outside a Career Manager.");
+            Respond(LicensePurchaseStatus.OutOfRange);
             return;
         }
 
@@ -1950,19 +2288,59 @@ public class NetworkServer : NetworkManager
         if (CareerManagerDebtController.Instance.NumberOfNonZeroPricedDebts > 0)
         {
             LogWarning($"{player.Username} tried to purchase a {(packet.IsJobLicense ? "job" : "general")} license with id {packet.Id} while having existing debts!");
+            Respond(LicensePurchaseStatus.DebtOutstanding);
             return;
         }
 
-        if (!Inventory.Instance.RemoveMoney(price.Value))
+        bool debited = false;
+        try
         {
-            LogWarning($"{player.Username} tried to purchase a {(packet.IsJobLicense ? "job" : "general")} license with id {packet.Id} without enough money to do so!");
-            return;
+            debited = true; // RemoveMoney mutates before MoneyChanged callbacks.
+            if (!Inventory.Instance.RemoveMoney(price.Value))
+            {
+                debited = false;
+                LogWarning($"{player.Username} tried to purchase a {(packet.IsJobLicense ? "job" : "general")} license with id {packet.Id} without enough money to do so!");
+                Respond(LicensePurchaseStatus.InsufficientFunds);
+                return;
+            }
+
+            if (packet.IsJobLicense)
+                LicenseManager.Instance.AcquireJobLicense(jobLicense);
+            else
+                LicenseManager.Instance.AcquireGeneralLicense(generalLicense);
+        }
+        catch (Exception ex)
+        {
+            acquired = packet.IsJobLicense
+                ? LicenseManager.Instance.IsJobLicenseAcquired(jobLicense)
+                : LicenseManager.Instance.IsGeneralLicenseAcquired(generalLicense);
+            if (!acquired && debited)
+            {
+                try { Inventory.Instance.AddMoney(price.Value); }
+                catch (Exception refundError) { LogError($"License refund failed for {player.Username}: {refundError}"); }
+            }
+            if (!acquired)
+            {
+                LogError($"License purchase failed for {player.Username}: {ex}");
+                Respond(LicensePurchaseStatus.ServerError);
+                return;
+            }
+            LogError($"License was acquired, but a post-acquisition callback failed: {ex}");
         }
 
-        if (packet.IsJobLicense)
-            LicenseManager.Instance.AcquireJobLicense(jobLicense);
-        else
-            LicenseManager.Instance.AcquireGeneralLicense(generalLicense);
+        // The server owns the physical document; normal item sync delivers it to nearby clients.
+        try
+        {
+            if (packet.IsJobLicense)
+                BookletCreator.CreateLicense(jobLicense, screen.licensePrinter.spawnAnchor.position,
+                    screen.licensePrinter.spawnAnchor.rotation, WorldMover.OriginShiftParent);
+            else
+                BookletCreator.CreateLicense(generalLicense, screen.licensePrinter.spawnAnchor.position,
+                    screen.licensePrinter.spawnAnchor.rotation, WorldMover.OriginShiftParent);
+            screen.licensePrinter.Print(ignoreCooldown: true);
+        }
+        catch (Exception ex) { LogError($"License acquired, but its physical document failed to print: {ex}"); }
+        Respond(LicensePurchaseStatus.Success);
     }
     private void OnServerboundJobValidateRequestPacket(ServerboundJobValidateRequestPacket packet, ITransportPeer peer)
     {
@@ -1981,6 +2359,13 @@ public class NetworkServer : NetworkManager
         if (!NetworkedStationController.Get(packet.StationNetId, out NetworkedStationController networkedStationController) || networkedStationController.JobValidator == null)
         {
             LogWarning($"Received job validation request from {player.DisplayName} for job {networkedJob?.Job?.ID} at station with netId {packet.StationNetId}, StationController found: {networkedStationController != null}, JobValidator found: {networkedStationController?.JobValidator != null}");
+            return;
+        }
+
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            !ServerActionPolicy.InRange((player.WorldPosition - networkedStationController.JobValidator.transform.position).sqrMagnitude, 10f))
+        {
+            RejectAction(peer, "Job validation", "not ready, permission denied or out of reach");
             return;
         }
 
@@ -2029,7 +2414,12 @@ public class NetworkServer : NetworkManager
             return;
         }
 
-        //Todo: add check for player authorisation to use loading/uloading machines
+        if (!AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            !Enum.IsDefined(typeof(WarehouseAction), packet.WarehouseAction))
+        {
+            RejectAction(peer, "Warehouse", "not ready, permission denied or invalid action");
+            return;
+        }
 
         //Find the warehouse
         if (!NetworkedWarehouseMachineController.Get(packet.NetId, out var targetWarehouse))
@@ -2038,9 +2428,20 @@ public class NetworkServer : NetworkManager
             return;
         }
 
-        //Todo: add check for player distance from machine
+        if (targetWarehouse == null || targetWarehouse.WarehouseMachineController == null ||
+            targetWarehouse.WarehouseMachine == null ||
+            !ServerActionPolicy.InRange((player.WorldPosition - targetWarehouse.WarehouseMachineController.transform.position).sqrMagnitude, 10f))
+        {
+            RejectAction(peer, "Warehouse", "unavailable or out of reach");
+            return;
+        }
 
-        targetWarehouse.ServerProcessWarehouseAction(packet.WarehouseAction);
+        try { targetWarehouse.ServerProcessWarehouseAction(packet.WarehouseAction); }
+        catch (Exception ex)
+        {
+            LogError($"Warehouse action failed: {ex}");
+            RejectAction(peer, "Warehouse", "server error");
+        }
     }
 
     private void OnCommonChatPacket(CommonChatPacket packet, ITransportPeer peer)
@@ -2098,8 +2499,15 @@ public class NetworkServer : NetworkManager
 
     private void OnCommonItemChangePacket(CommonItemChangePacket packet, ITransportPeer peer)
     {
-        //if(!TryGetServerPlayer(peer, out var player))
-        //    return;
+        if (!TryGetServerPlayer(peer, out var player) || player.LoadingState != PlayerLoadingState.Complete)
+            return;
+        if (packet?.Items == null || packet.Items.Count > NetworkedItemManager.MaxClientBatchItems ||
+            !NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player))
+        {
+            LogWarning($"Rejected oversized item update batch from {player.Username}");
+            KickPlayer(player);
+            return;
+        }
 
         //LogDebug(()=>$"OnCommonItemChangePacket({packet?.Items?.Count}, {peer.Id} (\"{player.Username}\"))");
 
@@ -2132,7 +2540,6 @@ public class NetworkServer : NetworkManager
 
         //);
 
-        //NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, player);
     }
 
     private void OnCommonCashRegisterWithModulesActionPacket(CommonCashRegisterWithModulesActionPacket packet, ITransportPeer peer)

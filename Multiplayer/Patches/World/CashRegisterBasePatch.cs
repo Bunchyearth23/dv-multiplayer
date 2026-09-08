@@ -32,7 +32,13 @@ public class CashRegisterBasePatch
         }
 
         if (netCashRegister.IsShopRegister)
-            return true;
+        {
+            // Shop purchases debit the authoritative shared wallet in one transaction.
+            // Money objects are spent before AddCash is called, so return that value to
+            // the wallet immediately and never create a second deposited balance.
+            Inventory.Instance.AddMoney(amount);
+            return false;
+        }
 
         Inventory.Instance.AddMoney(amount);
 

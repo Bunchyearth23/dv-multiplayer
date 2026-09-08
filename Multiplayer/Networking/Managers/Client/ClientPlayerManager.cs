@@ -92,6 +92,7 @@ public class ClientPlayerManager : IDisposable
         if (!TryGetPlayer(playerid, out NetworkedPlayer networkedPlayer))
             return;
 
+        networkedPlayer.ReleaseItems();
         OnPlayerDisconnected?.Invoke(networkedPlayer);
         Object.Destroy(networkedPlayer.gameObject);
         playerMap.Remove(playerid);

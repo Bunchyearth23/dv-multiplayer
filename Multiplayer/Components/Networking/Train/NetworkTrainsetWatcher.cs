@@ -12,7 +12,17 @@ namespace Multiplayer.Components.Networking.Train;
 
 public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
 {
+    public NetworkCampaignMetrics Metrics { get; } = new();
+    private float nextMetricsReport;
+    private void Update()
+    {
+        Metrics.RecordFrame(Time.unscaledDeltaTime);
+        if (Time.realtimeSinceStartup < nextMetricsReport) return;
+        nextMetricsReport = Time.realtimeSinceStartup + 10f;
+        Multiplayer.Log(Metrics.Format(System.GC.GetTotalMemory(false)));
+    }
     private ClientboundTrainsetPhysicsPacket cachedSendPacket;
+    private long nextRepairAt;
 
     const float DESIRED_FULL_SYNC_INTERVAL = 2f; // in seconds
     const int MAX_UNSYNC_TICKS = (int)(NetworkLifecycle.TICK_RATE * DESIRED_FULL_SYNC_INTERVAL);
@@ -134,7 +144,7 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
             else if (!trainCar.isStationary)
                 anyCarMoving = true;
 
-            anyCarTeleporting = trainCar.IsTeleporting;
+            anyCarTeleporting |= trainCar.IsTeleporting || NetworkLifecycle.Instance.Server.IsFastTravelCar(trainCar.GetNetId());
             if (anyCarTeleporting)
                 Multiplayer.LogDebug(() => $"Server_TickSet() {trainCar?.ID} in set {set.id} is teleporting");
 
@@ -142,7 +152,7 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
             if (anyCarMoving || anyCarTeleporting || maxTicksReached)
             {
                 //Multiplayer.LogDebug(() => $"Server_TickSet() TrainCar {trainCar.ID} ({netTC?.NetId}) from set: {cachedSendPacket.FirstNetId} is moving or due for sync! stationary: {trainCar.isStationary}, RB velocity: {trainCar.rb.velocity} {trainCar.rb.velocity.magnitude}, tracks dirty: {netTC?.BogieTracksDirty} sync: {netTC?.TicksSinceSync >= MAX_UNSYNC_TICKS}");
-                break;
+                // Keep scanning: a later car may be teleporting.
             }
         }
 
@@ -203,45 +213,26 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
 
     public void Client_HandleTrainsetPhysicsUpdate(ClientboundTrainsetPhysicsPacket packet)
     {
-        Trainset set = Trainset.allSets.Find
-        (
-            set =>
-            set.firstCar.GetNetId() == packet.FirstNetId ||
-            set.lastCar.GetNetId() == packet.FirstNetId ||
-            set.firstCar.GetNetId() == packet.LastNetId ||
-            set.lastCar.GetNetId() == packet.LastNetId
-        );
-
-        if (set == null)
+        if (packet.TrainsetParts == null) return;
+        var ids = packet.TrainsetParts.Select(p => p.NetId).ToArray();
+        if (!TrainCompositionPolicy.IsValid(ids)) return;
+        Trainset set = Trainset.allSets.Find(s => s != null && s.cars != null &&
+            s.cars.Any(c => c != null && c.GetNetId() == packet.FirstNetId));
+        if (set == null || !TrainCompositionPolicy.Matches(
+            set.cars.Select(c => c == null ? (ushort)0 : c.GetNetId()).ToArray(), ids))
         {
-            Multiplayer.LogWarning($"Received {nameof(ClientboundTrainsetPhysicsPacket)} for unknown trainset with FirstNetId: {packet.FirstNetId} and LastNetId: {packet.LastNetId}");
-            return;
-        }
-
-        // We have missing cars - TODO: resolve
-        if (set.cars.Count != packet.TrainsetParts.Length)
-        {
-            //log the discrepancies
-            //Multiplayer.LogWarning(
-            //    $"Received {nameof(ClientboundTrainsetPhysicsPacket)} for trainset with FirstNetId: {packet.FirstNetId} and LastNetId: {packet.LastNetId} with {packet.TrainsetParts.Length} parts, but trainset has {set.cars.Count} parts");
-
-            for (int i = 0; i < packet.TrainsetParts.Length; i++)
+            if (set == null) Metrics.UnknownTrainsets++; else Metrics.CompositionMismatches++;
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (now >= nextRepairAt)
             {
-                if (NetworkedTrainCar.TryGet(packet.TrainsetParts[i].NetId, out NetworkedTrainCar networkedTrainCar))
-                {
-                    //Multiplayer.LogDebug(()=>$"Applying TrainPhysicsUpdate to {packet.TrainsetParts[i].NetId}");
-                    networkedTrainCar.Client_ReceiveTrainPhysicsUpdate(in packet.TrainsetParts[i], packet.Tick);
-                }
-                else
-                {
-                    Multiplayer.LogWarning($"Unable to apply TrainPhysicsUpdate to {packet.TrainsetParts[i].NetId}, NetworkedTrainCar not found!");
-                }
+                nextRepairAt = now + 2 * System.Diagnostics.Stopwatch.Frequency;
+                NetworkLifecycle.Instance.Client.SendTrainSyncRequest(ids[0]);
             }
+            // Do not apply positional parts by index to a divergent composition.
             return;
         }
-
         //Check direction of trainset vs packet
-        if (set.firstCar.GetNetId() == packet.LastNetId)
+        if (set.cars[0].GetNetId() != ids[0])
             packet.TrainsetParts = packet.TrainsetParts.Reverse().ToArray();
 
         // Check if any of the cars have exceeded the threshold for a hard sync
@@ -266,6 +257,12 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
                 Multiplayer.LogWarning($"Unable to apply TrainPhysicsUpdate to {packet.TrainsetParts[i].NetId}, NetworkedTrainCar not found!");
                 missingCars = true;
             }
+        }
+
+        if (missingCars)
+        {
+            NetworkLifecycle.Instance.Client.SendTrainSyncRequest(ids[0]);
+            return;
         }
 
         if (hardSyncRequired)
@@ -306,3 +303,5 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
         return $"[{nameof(NetworkTrainsetWatcher)}]";
     }
 }
+
+

@@ -9,7 +9,9 @@ using Multiplayer.Networking.Data;
 using Multiplayer.Networking.Data.Items;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace Multiplayer.Networking.Packets.Clientbound;
@@ -49,7 +51,7 @@ public class ClientboundSaveGameDataPacket
         JObject difficulty = new();
         DifficultyDataUtils.SetDifficultyToJSON(difficulty, NetworkLifecycle.Instance.Server.Difficulty);
 
-        JObject playerData = NetworkedSaveGameManager.Instance.Server_GetPlayerData(data, player.Guid);
+        JObject playerData = NetworkedSaveGameManager.Instance.Server_PrepareStartingInventory(data, player.Guid);
 
         Multiplayer.LogDebug(() =>
         {
@@ -62,28 +64,9 @@ public class ClientboundSaveGameDataPacket
             return $"ClientboundSaveGameDataPacket.CreatePacket() UnlockedGen: {{{unlockedGen}}}, PacketGen: {{{packetGen}}},  UnlockedJob: {{{unlockedJob}}}, PacketJob: {{{packetJob}}}";
         });
 
-        List<PlayerItemSaveData> playerItems = [];
-        string[] items = ["shovel", "lighter", "Oiler", "Lantern", "Flashlight", "Hanger", "DuctTape"];
-        string[] states = ["", "", "", "", "{\"Restock\": true,\"Battery_power\": 100}", "", ""];
-
-        for (int i = 0; i < items.Length; i++)
-        {
-            JObject state;
-
-            if (!string.IsNullOrEmpty(states[i]))
-                state = JObject.Parse(states[i]);
-            else
-                state = [];
-
-            var testItem = new PlayerItemSaveData()
-            {
-                ItemPrefabName = items[i],
-                BelongsToPlayer = true,
-                InventorySlotIndex = 14 + i,
-                State = state
-            };
-            playerItems.Add(testItem);
-        }
+        // The server commits persistent grants before sending the initial inventory.
+        var playerItems = PlayerInventorySaveCodec.Read(playerData) ?? Array.Empty<PlayerItemSaveData>();
+        player.InventoryRestoreData = playerItems;
 
         return new ClientboundSaveGameDataPacket
         {
@@ -112,6 +95,15 @@ public class ClientboundSaveGameDataPacket
 
     public ClientboundSaveGameDataPacket Clone()
     {
-        return MemberwiseClone() as ClientboundSaveGameDataPacket;
+        var copy = (ClientboundSaveGameDataPacket)MemberwiseClone();
+        copy.AcquiredGeneralLicenses = AcquiredGeneralLicenses?.ToArray();
+        copy.AcquiredJobLicenses = AcquiredJobLicenses?.ToArray();
+        copy.UnlockedGarages = UnlockedGarages?.ToArray();
+        copy.PlayerItems = PlayerItems?.Select(item =>
+        {
+            item.State = (JObject)item.State?.DeepClone();
+            return item;
+        }).ToArray() ?? Array.Empty<PlayerItemSaveData>();
+        return copy;
     }
 }

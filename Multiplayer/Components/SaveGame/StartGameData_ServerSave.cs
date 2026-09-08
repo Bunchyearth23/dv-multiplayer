@@ -7,6 +7,7 @@ using DV.Utils;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.Networking.World;
 using Multiplayer.Networking.Packets.Clientbound;
+using Multiplayer.Networking.Data.Items;
 using Multiplayer.Patches.SaveGame;
 using Newtonsoft.Json.Linq;
 using System;
@@ -28,9 +29,11 @@ public class StartGameData_ServerSave : AStartGameData
 
     public void SetFromPacket(ClientboundSaveGameDataPacket packet)
     {
-        this.packet = packet.Clone();
+        packet = packet.Clone();
+        this.packet = packet;
 
         saveGameData = SaveGameManager.MakeEmptySave();
+        saveGameData.SetBool(StartingInventoryGrants.AuthoritativeLoadKey, true);
         saveGameData.SetString(SaveGameKeys.Game_mode, packet.GameMode);
         DifficultyToUse = DifficultyDataUtils.GetDifficultyFromJSON(JObject.Parse(packet.SerializedDifficulty), false);
 
@@ -61,6 +64,8 @@ public class StartGameData_ServerSave : AStartGameData
 
         // Load player inventory
         List<StorageItemData> items = [];
+        List<StorageItemData> containerItems = [];
+        List<StorageItemData> overflowItems = [];
 
         foreach (var item in packet.PlayerItems)
         {
@@ -80,10 +85,14 @@ public class StartGameData_ServerSave : AStartGameData
                 item.ContainerId
             );
 
-            items.Add(itemData);
+            if (!string.IsNullOrEmpty(item.ContainerId)) containerItems.Add(itemData);
+            else if (item.InventorySlotIndex < 0) overflowItems.Add(itemData);
+            else items.Add(itemData);
         }
         Multiplayer.LogDebug(() => $"StartGameData_ServerSave.SetFromPacket() PlayerItems count: {packet.PlayerItems.Length}, items string count: {items.Count()}");
         saveGameData.SetObject(SaveGameKeys.Storage_Inventory, items);
+        saveGameData.SetObject(SaveGameKeys.Storage_ItemContainers, containerItems);
+        saveGameData.SetObject(SaveGameKeys.Storage_LostAndFound, overflowItems);
 
         //For clients we need to have a session - new users may not have a session and this may also be causing problems with licenses syncing
         if (NetworkLifecycle.Instance.IsHost())

@@ -772,6 +772,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public void Server_DirtyAllState()
     {
+        TicksSinceSync = (uint)(NetworkLifecycle.TICK_RATE * 2);
         handbrakeDirty = true;
         mainResPressureDirty = true;
         cargoStateDirty = true;
@@ -799,6 +800,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public bool Server_ValidateClientSimFlowPacket(ServerPlayer player, CommonTrainPortsPacket packet)
     {
+        if (NetworkLifecycle.Instance.Server.IsFastTravelCar(NetId)) return false;
         // Only allow control ports to be updated by clients
         if (hasSimFlow)
             foreach (uint portNetId in packet.PortIds)
@@ -1004,11 +1006,38 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public bool Server_ValidateCouplerInteraction(CommonCouplerInteractionPacket packet, ServerPlayer player)
     {
+        if (NetworkLifecycle.Instance.Server.IsFastTravelCar(NetId) || NetworkLifecycle.Instance.Server.IsFastTravelCar(packet.OtherNetId)) return false;
         Multiplayer.LogDebug(() =>
                 $"Server_ValidateCouplerInteraction([[{(CouplerInteractionType)packet.Flags}], {CurrentID}, {packet.NetId}], {player.PlayerId}) " +
                 $"isFront: {packet.IsFrontCoupler}, frontInteracting: {frontInteracting}, frontInteractionPeer: {frontInteractionPlayer}, " +
                 $"rearInteracting: {rearInteracting}, rearInteractionPeer: {rearInteractionPlayer}"
                 );
+
+        if (TrainCar == null || player == null ||
+            !ServerActionPolicy.CouplerFlags(packet.Flags, out var remote)) return false;
+        var owner = packet.IsFrontCoupler ? frontInteractionPlayer : rearInteractionPlayer;
+        bool releasing = packet.Flags == 0 && owner == player;
+        if (!releasing && !NetworkLifecycle.Instance.Server.AllowsAction(player,
+            Multiplayer.Settings.AllowClientCoupling && (!remote || Multiplayer.Settings.AllowClientRemoteCoupling))) return false;
+        var coupler = packet.IsFrontCoupler ? TrainCar.frontCoupler : TrainCar.rearCoupler;
+        if (coupler == null) return false;
+        // Remote packets address couplers anywhere along the paired train; never use physical reach for them.
+        if (!remote && !releasing && !ServerActionPolicy.InRange(
+            (player.WorldPosition - coupler.transform.position).sqrMagnitude, 10f)) return false;
+
+        if (packet.OtherNetId != 0)
+        {
+            if (packet.OtherNetId == NetId || !TryGet(packet.OtherNetId, out NetworkedTrainCar otherCar) || otherCar?.TrainCar == null) return false;
+            var other = packet.IsFrontOtherCoupler ? otherCar.TrainCar.frontCoupler : otherCar.TrainCar.rearCoupler;
+            if (other == null || !ServerActionPolicy.InRange((coupler.transform.position - other.transform.position).sqrMagnitude, 5f)) return false;
+            var otherOwner = packet.IsFrontOtherCoupler ? otherCar.frontInteractionPlayer : otherCar.rearInteractionPlayer;
+            bool otherBusy = packet.IsFrontOtherCoupler ? otherCar.frontInteracting : otherCar.rearInteracting;
+            if (otherBusy && otherOwner != player) return false;
+            if (coupler.coupledTo != null && coupler.coupledTo != other) return false;
+            if (other.coupledTo != null && other.coupledTo != coupler) return false;
+        }
+        else if ((((CouplerInteractionType)packet.Flags) & (CouplerInteractionType.CoupleViaUI | CouplerInteractionType.CouplerCouple)) != 0)
+            return false;
 
         // Ensure no one else is interacting
         if (packet.IsFrontCoupler && frontInteracting && player != frontInteractionPlayer ||
@@ -1020,7 +1049,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
         Multiplayer.LogDebug(() => $"Server_ValidateCouplerInteraction([{packet.Flags}, {CurrentID}, {packet.NetId}], {player.PlayerId}) No one interacting");
 
-        if (((CouplerInteractionType)packet.Flags).HasFlag(CouplerInteractionType.Start))
+        if (!remote && ((CouplerInteractionType)packet.Flags).HasFlag(CouplerInteractionType.Start))
         {
             if (packet.IsFrontCoupler)
             {
@@ -1041,7 +1070,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
                 rearInteracting = false;
         }
 
-        //todo: Additional checks for player location/proximity
+
 
         Multiplayer.LogDebug(() => $"Server_ValidateCouplerInteraction([{packet.Flags}, {CurrentID}, {packet.NetId}], {player.PlayerId}) Validation passed!");
         return true;
@@ -1130,23 +1159,22 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     private void Server_OnPlayerDisconnect(ServerPlayer player)
     {
-        //todo: resolve player disconnection during chain interaction
-        if (frontInteractionPlayer == player || rearInteractionPlayer == player)
+        if (player == null)
+            return;
+
+        if (frontInteractionPlayer == player)
         {
-            //Multiplayer.LogWarning($"Server_OnPlayerDisconnect() Coupler interaction in unknown state [{CurrentID}, {NetId}] isFront: {frontInteractionPlayer == player}");
-            if (frontInteractionPlayer == player)
-            {
-                frontInteracting = false;
-                //NetworkLifecycle.Instance.Client.SendCouplerInteraction(cou, coupler, otherCoupler);
-            }
-            else
-            {
-                rearInteracting = false;
-            }
+            frontInteracting = false;
+            frontInteractionPlayer = null;
+        }
+        if (rearInteractionPlayer == player)
+        {
+            rearInteracting = false;
+            rearInteractionPlayer = null;
         }
 
         // Clean up blocked controls
-        foreach (var kvp in portAuthority.Where(kvp => kvp.Value == player))
+        foreach (var kvp in portAuthority.Where(kvp => kvp.Value == player).ToArray())
         {
             portAuthority.Remove(kvp.Key);
             NetworkLifecycle.Instance.Server.SendTrainControlAuthorityUpdate(NetId, kvp.Key, ControlAuthorityState.Released);
@@ -2055,6 +2083,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
             // Only apply position update if change exceeds threshold (stops cariages from jittering while stationary)
             float positionDelta = Vector3.Distance(TrainCar.transform.position, worldPos);
+            NetworkTrainsetWatcher.Instance.Metrics.RecordPosition(positionDelta, NetworkTrainsetWatcher.MAX_POSITION_DELTA);
 
             if (positionDelta > NetworkTrainsetWatcher.MAX_POSITION_DELTA)
             {
@@ -2103,6 +2132,16 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         Client_trainRigidbodyQueue.Clear();
         client_bogie1Queue.Clear();
         client_bogie2Queue.Clear();
+        TrainCar.stress.ResetTrainStress();
+    }
+
+    public void Client_ResetAfterRelocation(uint tick)
+    {
+        lastTickProcessed = tick;
+        Client_trainSpeedQueue?.Clear();
+        Client_trainRigidbodyQueue?.Clear();
+        client_bogie1Queue?.Clear();
+        client_bogie2Queue?.Clear();
         TrainCar.stress.ResetTrainStress();
     }
 
@@ -2158,6 +2197,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
                 // Only apply position update if change exceeds threshold (stops cariages from jittering while stationary)
                 float positionDelta = Vector3.Distance(TrainCar.transform.position, worldPos);
+            NetworkTrainsetWatcher.Instance.Metrics.RecordPosition(positionDelta, NetworkTrainsetWatcher.MAX_POSITION_DELTA);
 
                 if (positionDelta > POSITION_UPDATE_THRESHOLD)
                 {
@@ -2483,3 +2523,4 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
     }
     #endregion
 }
+

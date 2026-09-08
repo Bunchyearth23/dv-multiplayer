@@ -54,6 +54,20 @@ public class Settings : UnityModManager.ModSettings, IDrawable
     public string Details = "";
 
     [Space(10)]
+    [Header("Host permissions (clients)")]
+    [Draw("Allow servicing and warehouses")]
+    public bool AllowClientService = true;
+    [Draw("Allow coupling")]
+    public bool AllowClientCoupling = true;
+    [Draw("Allow remote coupling")]
+    public bool AllowClientRemoteCoupling = true;
+    [Draw("Allow purchases")]
+    public bool AllowClientPurchases = true;
+    [Draw("Allow train spawn, delete and rerail")]
+    public bool AllowClientTrainManagement = true;
+    [Draw("Allow time advance")]
+    public bool AllowClientTimeAdvance = true;
+
     [Header("Lobby Server")]
     [Draw("Lobby Server address", Tooltip = "Address of lobby server for finding multiplayer games.")]
     public string LobbyServerAddress = "https://dv.mineit.space";

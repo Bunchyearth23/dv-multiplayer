@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <OutputPath>../../../build/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../MultiplayerAssets/Assets/Scripts/Multiplayer/**/*.cs" />
+    <Reference Include="$(DvInstallDir)/DerailValley_Data/Managed/*.dll">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

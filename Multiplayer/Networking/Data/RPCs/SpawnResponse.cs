@@ -10,7 +10,12 @@ public class SpawnResponse : IRpcResponse
         Success = 0,
         InsufficientPermissions = 1,
         InsufficientFunds = 2,
-        InUse = 3
+        InUse = 3,
+        InvalidRequest = 4,
+        OutOfRange = 5,
+        NoSpace = 6,
+        NotReady = 7,
+        ServerError = 8
     }
 
     public ResponseType Response { get; set; }

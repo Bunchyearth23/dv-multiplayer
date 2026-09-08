@@ -14,6 +14,7 @@ public static class ItemBase_Patch
     {
         //Multiplayer.Log($"ItemBase.Awake() ItemSpec: {__instance?.InventorySpecs?.itemPrefabName}");
         var networkedItem = __instance.GetOrAddComponent<NetworkedItem>();
+        __instance.GetOrAddComponent<ItemSaveData>();
 
         //networkedItem.FinaliseTrackedValues();
         return;

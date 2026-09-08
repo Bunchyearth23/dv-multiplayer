@@ -17,6 +17,90 @@ namespace Multiplayer.Components.Networking.Train;
 
 public static class NetworkedCarSpawner
 {
+    public static void RepairCars(TrainsetSpawnPart[] parts, bool relocate = false, uint tick = 0)
+    {
+        if (parts == null || !TrainCompositionPolicy.IsValid(parts.Select(p => p.NetId).ToArray()))
+            throw new System.IO.InvalidDataException("Invalid train repair manifest.");
+        // Validate every dependency before spawning or changing any links.
+        foreach (var part in parts)
+        {
+            if (!Finite(part.Position.x) || !Finite(part.Position.y) || !Finite(part.Position.z) ||
+                !Finite(part.Rotation.x) || !Finite(part.Rotation.y) || !Finite(part.Rotation.z) || !Finite(part.Rotation.w) ||
+                !Finite(part.Speed) || string.IsNullOrWhiteSpace(part.CarId) || !System.Guid.TryParse(part.CarGuid, out var guid) || guid == System.Guid.Empty ||
+                (relocate && (part.Bogie1.HasDerailed || part.Bogie2.HasDerailed)))
+                throw new System.IO.InvalidDataException("Invalid train repair state.");
+            if (!TrainComponentLookup.Instance.LiveryFromId(part.LiveryId, out _) ||
+                (!part.Bogie1.HasDerailed && !NetworkedRailTrack.TryGet(part.Bogie1.TrackNetId, out NetworkedRailTrack _)) ||
+                (!part.Bogie2.HasDerailed && !NetworkedRailTrack.TryGet(part.Bogie2.TrackNetId, out NetworkedRailTrack _)))
+                throw new System.IO.InvalidDataException("Train repair dependencies are unavailable.");
+            if (NetworkedTrainCar.TryGet(part.NetId, out TrainCar existing))
+            {
+                if (existing.CarGUID != part.CarGuid || existing.ID != part.CarId || existing.carLivery.id != part.LiveryId)
+                    throw new System.IO.InvalidDataException("Train repair identity conflict.");
+            }
+            else if (NetworkedTrainCar.GetTrainCarFromTrainId(part.CarId, out _))
+                throw new System.IO.InvalidDataException("Train repair would duplicate a car identity.");
+            ValidateLink(part, part.FrontCoupling, true, parts);
+            ValidateLink(part, part.RearCoupling, false, parts);
+        }
+        foreach (var part in parts)
+            if (!NetworkedTrainCar.TryGet(part.NetId, out NetworkedTrainCar _))
+            {
+                var spawned = SpawnCar(part, true);
+                if (spawned == null)
+                    throw new System.InvalidOperationException("Train repair spawn failed.");
+                SetBrakeParams(part.BrakeData, spawned.TrainCar);
+            }
+        // Remove stale links before adding authoritative ones, including split trainsets.
+        foreach (var part in parts)
+        {
+            NetworkedTrainCar.TryGet(part.NetId, out TrainCar car);
+            RemoveWrongLink(car.frontCoupler, part.FrontCoupling);
+            RemoveWrongLink(car.rearCoupler, part.RearCoupling);
+        }
+        if (relocate)
+        {
+            foreach (var part in parts)
+            {
+                NetworkedTrainCar.TryGet(part.NetId, out TrainCar car);
+                NetworkedRailTrack.TryGet(part.Bogie1.TrackNetId, out NetworkedRailTrack track);
+                if (part.Bogie1.HasDerailed || part.Bogie2.HasDerailed)
+                    throw new System.IO.InvalidDataException("Cannot relocate a derailed train.");
+                car.MoveToTrack(track.RailTrack, part.Position + WorldMover.currentMove, part.Rotation * Vector3.forward);
+                car.GetComponent<TrainCarInteriorPhysics>()?.SyncPosition();
+                if (car.TryNetworked(out NetworkedTrainCar netCar)) netCar.Client_ResetAfterRelocation(tick);
+            }
+            Physics.SyncTransforms();
+        }
+        for (int i = parts.Length - 1; i >= 0; i--)
+        {
+            NetworkedTrainCar.TryGet(parts[i].NetId, out TrainCar car);
+            Couple(in parts[i], car, false);
+        }
+    }
+
+    private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+    private static void ValidateLink(TrainsetSpawnPart owner, CouplingData link, bool front, TrainsetSpawnPart[] parts)
+    {
+        if (!link.IsCoupled) return;
+        if (link.ConnectionNetId == owner.NetId || !parts.Any(p => p.NetId == link.ConnectionNetId))
+            throw new System.IO.InvalidDataException("Train repair has an invalid coupling target.");
+        var target = parts.First(p => p.NetId == link.ConnectionNetId);
+        var reciprocal = link.ConnectionToFront ? target.FrontCoupling : target.RearCoupling;
+        if (!reciprocal.IsCoupled || reciprocal.ConnectionNetId != owner.NetId || reciprocal.ConnectionToFront != front)
+            throw new System.IO.InvalidDataException("Train repair coupling is not reciprocal.");
+    }
+
+    private static void RemoveWrongLink(Coupler coupler, CouplingData expected)
+    {
+        if (coupler.coupledTo != null && (!expected.IsCoupled ||
+            coupler.coupledTo.train.GetNetId() != expected.ConnectionNetId ||
+            coupler.coupledTo.isFrontCoupler != expected.ConnectionToFront))
+            coupler.Uncouple(true, false, false, true);
+        coupler.preventAutoCouple = expected.PreventAutoCouple;
+    }
+
     private static readonly List<RestorationData> _restorationData = [];
 
     static NetworkedCarSpawner()
@@ -193,7 +277,10 @@ public static class NetworkedCarSpawner
             else
             {
                 var otherCoupler = couplingData.ConnectionToFront ? otherCar.frontCoupler : otherCar.rearCoupler;
-                SetCouplingState(currentCoupler, otherCoupler, couplingData.State);
+                if (currentCoupler.coupledTo == otherCoupler)
+                    currentCoupler.SetChainTight(couplingData.State == ChainCouplerInteraction.State.Attached_Tight);
+                else
+                    SetCouplingState(currentCoupler, otherCoupler, couplingData.State);
             }
         }
 

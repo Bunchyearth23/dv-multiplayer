@@ -107,18 +107,20 @@ public abstract class NetworkManager
 
     public virtual void Stop()
     {
-        transport.Stop(true);
-
-        transport.OnConnectionRequest -= OnConnectionRequest;
-        transport.OnPeerConnected -= OnPeerConnected;
-        transport.OnPeerDisconnected -= OnPeerDisconnected;
-        transport.OnNetworkReceive -= OnNetworkReceive;
-        transport.OnNetworkError -= OnNetworkError;
-        transport.OnNetworkLatencyUpdate -= OnNetworkLatencyUpdate;
-
-        Settings.OnSettingsUpdated -= OnSettingsUpdated;
-
-        NetIdProvider.Destroy(NetIdProvider.Instance);
+        try { transport.Stop(true); }
+        finally
+        {
+            transport.OnConnectionRequest -= OnConnectionRequest;
+            transport.OnPeerConnected -= OnPeerConnected;
+            transport.OnPeerDisconnected -= OnPeerDisconnected;
+            transport.OnNetworkReceive -= OnNetworkReceive;
+            transport.OnNetworkError -= OnNetworkError;
+            transport.OnNetworkLatencyUpdate -= OnNetworkLatencyUpdate;
+    
+            Settings.OnSettingsUpdated -= OnSettingsUpdated;
+    
+            NetIdProvider.Destroy(NetIdProvider.Instance);
+        }
     }
 
     protected NetDataWriter WritePacket<T>(T packet) where T : class, new()

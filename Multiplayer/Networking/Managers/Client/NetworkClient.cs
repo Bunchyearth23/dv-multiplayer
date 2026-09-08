@@ -54,7 +54,7 @@ using Object = UnityEngine.Object;
 
 namespace Multiplayer.Networking.Managers.Client;
 
-public class NetworkClient : NetworkManager
+public partial class NetworkClient : NetworkManager
 {
     protected override string LogPrefix => "[Client]";
 
@@ -80,7 +80,7 @@ public class NetworkClient : NetworkManager
     // One way ping in milliseconds
     public int Ping { get; private set; }
     private ITransportPeer serverPeer;
-    public float RPC_Timeout => (Ping * 8f) / 1000;
+    public float RPC_Timeout => Mathf.Max(2f, (Ping * 8f) / 1000);
 
     private ChatGUI chatGUI;
     private readonly bool isSinglePlayer;
@@ -90,6 +90,13 @@ public class NetworkClient : NetworkManager
 
     // Allow mods to add to the wait Queue
     private readonly List<string> readyBlocks = [];
+    private Action beginWorldSync;
+    private GuardedRoutine worldSyncRoutine;
+    private bool stopped;
+    private bool disconnectHandled;
+    private LoadingManifest initialJobs;
+    private bool inventoryRestored;
+    private LoadingManifest initialWorldItems;
 
     public NetworkClient(Settings settings, bool singlePlayer) : base(settings)
     {
@@ -97,10 +104,7 @@ public class NetworkClient : NetworkManager
         isSinglePlayer = singlePlayer;
         ClientPlayerManager = new ClientPlayerManager();
 
-        WorldStreamingInit.LoadingFinished += () =>
-        {
-            NetworkedPlayer.CaptureItemAnchorOffset();
-        };
+        WorldStreamingInit.LoadingFinished += NetworkedPlayer.CaptureItemAnchorOffset;
 
         Username = Multiplayer.Settings.GetUserName();
         characterModelId = Multiplayer.Settings.CharacterId;
@@ -121,7 +125,7 @@ public class NetworkClient : NetworkManager
             Username = this.Username,
             Guid = Multiplayer.Settings.GetGuid().ToByteArray(),
             Password = password,
-            BuildVersion = MainMenuControllerPatch.MenuProvider.BuildVersionString,
+            BuildVersion = ProtocolCompatibility.HandshakeBuild(MainMenuControllerPatch.MenuProvider.BuildVersionString),
             Mods = ModCompatibilityManager.Instance.GetLocalMods(),
             CharacterId = Multiplayer.Settings.CharacterId,
             IsVR = VRManager.IsVREnabled()
@@ -139,16 +143,28 @@ public class NetworkClient : NetworkManager
 
     public override void Stop()
     {
+        if (stopped) return;
+        stopped = true;
+        arrivalRoutine?.Dispose();
+        arrivalRoutine = null;
+        pendingTravel = null;
+        worldSyncRoutine?.Dispose();
+        worldSyncRoutine = null;
+        readyBlocks.Clear();
         Log("Stopping client");
-        if (!isAlsoHost && originalSession != null)
-        {
-            LogDebug(() => $"NetworkClient.Stop() destroying session... Original session is Null: {originalSession == null}");
-            Client_GameSession.SetCurrent(originalSession);
-        }
-
         Settings.OnSettingsUpdated -= OnSettingsUpdated;
-
-        base.Stop();
+        WorldStreamingInit.LoadingFinished -= NetworkedPlayer.CaptureItemAnchorOffset;
+        if (beginWorldSync != null)
+        {
+            WorldStreamingInit.LoadingFinished -= beginWorldSync;
+            beginWorldSync = null;
+        }
+        try
+        {
+            if (!isAlsoHost && originalSession != null)
+                Client_GameSession.SetCurrent(originalSession);
+        }
+        finally { base.Stop(); }
     }
 
     private void OnSettingsUpdated(Settings settings)
@@ -199,6 +215,13 @@ public class NetworkClient : NetworkManager
 
         // Train Sync
         netPacketProcessor.SubscribeReusable<ClientboundSpawnTrainSetPacket>(OnClientboundSpawnTrainSetPacket);
+        netPacketProcessor.SubscribeReusable<ClientboundTrainRepairPacket>(p =>
+        {
+            if (NetworkLifecycle.Instance.IsHost()) return;
+            try { NetworkedCarSpawner.RepairCars(p.Parts, p.Relocate, p.Tick); }
+            catch (Exception ex) { FailWorldSync(ex); }
+        });
+        netPacketProcessor.SubscribeReusable<ClientboundFastTravelPacket>(OnFastTravelResponse);
         netPacketProcessor.SubscribeReusable<ClientboundDestroyTrainCarPacket>(OnClientboundDestroyTrainCarPacket);
         netPacketProcessor.SubscribeReusable<ClientboundRerailTrainPacket>(OnClientboundRerailTrainPacket);
         netPacketProcessor.SubscribeReusable<ClientboundMoveTrainPacket>(OnClientboundMoveTrainPacket);
@@ -238,7 +261,20 @@ public class NetworkClient : NetworkManager
         // Job Sync
         netPacketProcessor.SubscribeReusable<ClientboundDebtStatusPacket>(OnClientboundDebtStatusPacket);
         netPacketProcessor.SubscribeReusable<ClientboundJobsUpdatePacket>(OnClientboundJobsUpdatePacket);
+        netPacketProcessor.SubscribeReusable<ClientboundInventoryRestorePacket>(OnInventoryRestore);
+        netPacketProcessor.SubscribeReusable<ClientboundWorldItemManifestPacket>(packet =>
+        {
+            if (stopped || LoadingState != PlayerLoadingState.ReadyForItems || initialWorldItems == null) return;
+            try { initialWorldItems.SetExpected(packet.ItemIds); }
+            catch (Exception ex) { FailWorldSync(ex); }
+        });
         netPacketProcessor.SubscribeReusable<ClientboundJobsCreatePacket>(OnClientboundJobsCreatePacket);
+        netPacketProcessor.SubscribeReusable<ClientboundJobManifestPacket>(packet =>
+        {
+            if (LoadingState != PlayerLoadingState.ReadyForJobs || initialJobs == null || stopped) return;
+            try { initialJobs.SetExpected(packet.JobIds); }
+            catch (Exception ex) { FailWorldSync(ex); }
+        });
         netPacketProcessor.SubscribeReusable<ClientboundJobValidateResponsePacket>(OnClientboundJobValidateResponsePacket);
         netPacketProcessor.SubscribeReusable<ClientboundTaskUpdatePacket>(OnClientboundTaskUpdatePacket);
 
@@ -303,6 +339,12 @@ public class NetworkClient : NetworkManager
          */
 
         Log($"World loaded beginning sync");
+        var inventoryDeadline = new LoadingDeadline("native inventory restoration", 120, 300);
+        while (StartingItemsController.Instance == null || !StartingItemsController.Instance.itemsLoaded)
+        {
+            inventoryDeadline.Check("waiting for StartingItemsController");
+            yield return null;
+        }
 
         Log($"Starting Item Manager...");
         NetworkedItemManager.Instance.CheckInstance();
@@ -319,8 +361,12 @@ public class NetworkClient : NetworkManager
         foreach (string modName in readyBlocks)
             displayLoadingInfo?.OnLoadingStatusChanged($"Waiting for mod {modName} to load", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
 
+        var deadline = new LoadingDeadline("mod readiness", 120, 600);
         while (readyBlocks.Count > 0)
+        {
+            deadline.Check(string.Join(", ", readyBlocks));
             yield return null;
+        }
 
         /* 
          * ReadyForWorldState
@@ -329,10 +375,14 @@ public class NetworkClient : NetworkManager
 
         Log("Syncing world state");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForWorldState);
-        displayLoadingInfo.OnLoadingStatusChanged(Locale.LOADING_INFO__SYNC_WORLD_STATE, false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
+        displayLoadingInfo?.OnLoadingStatusChanged(Locale.LOADING_INFO__SYNC_WORLD_STATE, false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
 
+        deadline = new LoadingDeadline("railway state", 60, 180);
         while (!railwayStateLoaded)
+        {
+            deadline.Check("waiting for tracks and turntables");
             yield return null;
+        }
 
         /*
          * ReadyForTrainSets
@@ -341,17 +391,23 @@ public class NetworkClient : NetworkManager
 
         Log("Requesting cars");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForTrainSets);
-        displayLoadingInfo.OnLoadingStatusChanged("Syncing rolling stock", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
+        displayLoadingInfo?.OnLoadingStatusChanged("Syncing rolling stock", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
 
         uint lastLoggedSets = 0;
 
         // Wait for trainset count from server
+        deadline = new LoadingDeadline("trainset manifest", 60, 180);
         while (trainSetsToSpawn == uint.MaxValue)
+        {
+            deadline.Check("waiting for server trainset count");
             yield return null;
+        }
 
         // Wait for all Trainsets to be spawned
+        deadline = new LoadingDeadline("trainset spawning", 120, 900);
         while (trainSetsSpawned < trainSetsToSpawn)
         {
+            deadline.Check($"{trainSetsSpawned}/{trainSetsToSpawn} trainsets spawned");
             if (lastLoggedSets != trainSetsSpawned)
             {
                 Log($"Waiting for train sets to spawn... {trainSetsSpawned}/{trainSetsToSpawn}");
@@ -362,7 +418,7 @@ public class NetworkClient : NetworkManager
         }
 
         // Artificial delay to allow cargo to be loaded prior to applying restoration states
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSecondsRealtime(0.5f);
 
         // Trainsets spawned, apply restoration states for demonstrators
         NetworkedCarSpawner.ApplyRestorationStates();
@@ -372,25 +428,43 @@ public class NetworkClient : NetworkManager
          */
 
         //TODO: implement
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSecondsRealtime(0.25f);
 
         /* 
          * ReadyForItems
          */
 
         Log($"Train sets spawned, requesting items");
+        inventoryRestored = false;
+        initialWorldItems = new LoadingManifest();
+        var itemRecovery = new LoadingRecovery();
         SendLoadStateUpdate(PlayerLoadingState.ReadyForItems);
-
-        yield return new WaitForSeconds(0.25f);
+        deadline = new LoadingDeadline("authoritative inventory restoration", 120, 300);
+        while (!inventoryRestored || !initialWorldItems.IsComplete)
+        {
+            deadline.Check(!inventoryRestored ? "waiting for inventory bindings from server" :
+                !initialWorldItems.HasManifest ? "waiting for world item manifest" :
+                $"missing world item IDs: {string.Join(", ", initialWorldItems.Missing)}");
+            if (initialWorldItems.HasManifest && itemRecovery.TryTake(initialWorldItems.Missing, out var missingItems))
+                SendPacket(serverPeer, new ServerboundWorldItemRecoveryPacket { ItemIds = missingItems }, DeliveryMethod.ReliableOrdered);
+            yield return null;
+        }
 
         /* 
          * ReadyForJobs
          */
 
         Log($"Requesting jobs");
+        initialJobs = new LoadingManifest();
         SendLoadStateUpdate(PlayerLoadingState.ReadyForJobs);
-
-        yield return new WaitForSeconds(0.25f);
+        deadline = new LoadingDeadline("job initialization", 120, 600);
+        while (!initialJobs.IsComplete)
+        {
+            deadline.Check(initialJobs.HasManifest
+                ? $"missing job IDs: {string.Join(", ", initialJobs.Missing)}"
+                : "waiting for server job manifest");
+            yield return null;
+        }
 
 
         /* 
@@ -400,14 +474,75 @@ public class NetworkClient : NetworkManager
         Log($"Requesting Hazmat Tiles");
         SendLoadStateUpdate(PlayerLoadingState.ReadyForTiles);
 
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSecondsRealtime(0.5f);
 
         SendLoadStateUpdate(PlayerLoadingState.Complete);
-        displayLoadingInfo.OnLoadingStatusChanged("Complete", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
-        yield return new WaitForSeconds(0.25f);
+        displayLoadingInfo?.OnLoadingStatusChanged("Complete", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
+        yield return new WaitForSecondsRealtime(0.25f);
 
         // Start culling player models
         ClientPlayerManager.StartCulling();
+    }
+
+    private void OnInventoryRestore(ClientboundInventoryRestorePacket packet)
+    {
+        if (stopped || LoadingState != PlayerLoadingState.ReadyForItems || inventoryRestored) return;
+        try
+        {
+            if (!string.IsNullOrEmpty(packet.Error)) throw new InvalidOperationException(packet.Error);
+            if (packet.Items == null || packet.Items.Length > PlayerInventorySaveCodec.MaxItems)
+                throw new FormatException("Invalid inventory restoration packet.");
+            var bindings = new List<(NetworkedItem Item, PlayerItemSaveData Data)>();
+            var networkIds = new HashSet<ushort>();
+            var persistentIds = new HashSet<Guid>();
+            foreach (var saved in packet.Items)
+            {
+                var identity = PlayerInventorySaveCodec.Identity(saved.State);
+                var item = NetworkedItem.FindPersistentItem(identity);
+                if (saved.NetId == 0 || !networkIds.Add(saved.NetId) || !persistentIds.Add(identity) ||
+                    item == null || !item.RegistrationComplete || item.Item?.InventorySpecs?.ItemPrefabName != saved.ItemPrefabName)
+                    throw new InvalidOperationException($"Restored inventory object is missing or duplicated: {saved.ItemPrefabName}, {identity}");
+                if (NetworkedItem.TryGet(saved.NetId, out var existing) && existing != item)
+                    throw new InvalidOperationException($"Inventory network ID {saved.NetId} is already assigned.");
+                bindings.Add((item, saved));
+            }
+            foreach (var binding in bindings)
+            {
+                binding.Item.NetId = binding.Data.NetId;
+                var states = new Dictionary<string, object>
+                {
+                    [PlayerInventorySaveCodec.IdentityKey] = binding.Item.PersistentId.ToString("N")
+                };
+                new ItemInventoryLocation(binding.Data.InventorySlotIndex, binding.Data.ContainerId,
+                    binding.Data.ContainerSlotIndex, binding.Data.InLockedSlot).Write(states);
+                binding.Item.ReceiveSnapshot(new ItemUpdateData
+                {
+                    ItemNetId = binding.Data.NetId, UpdateType = ItemUpdateData.ItemUpdateType.FullSync,
+                    ItemState = ItemState.InInventory, Player = PlayerId, States = states
+                });
+            }
+            inventoryRestored = true;
+        }
+        catch (Exception ex) { FailWorldSync(ex); }
+    }
+
+    public void NotifyInitialJobApplied(ushort jobId)
+    {
+        if (!stopped && LoadingState == PlayerLoadingState.ReadyForJobs)
+            initialJobs?.MarkApplied(jobId);
+    }
+
+    public void NotifyInitialWorldItemApplied(ushort itemId)
+    {
+        if (!stopped && LoadingState == PlayerLoadingState.ReadyForItems)
+            initialWorldItems?.MarkApplied(itemId);
+    }
+
+    internal void FailWorldSync(Exception error)
+    {
+        disconnectMessage = error.Message;
+        LogError($"World synchronization failed: {error}");
+        OnPeerDisconnected(selfPeer, error is TimeoutException ? DisconnectReason.Timeout : DisconnectReason.ConnectionFailed);
     }
 
     public ClientPlayerWrapper GetWrapper(NetworkedPlayer networkedPlayer)
@@ -430,7 +565,9 @@ public class NetworkClient : NetworkManager
     public override void OnPeerDisconnected(ITransportPeer peer, DisconnectReason disconnectReason)
     {
 
-        LogDebug(() => $"OnPeerDisconnected({peer.Id}, {disconnectReason}) disconnect message: {disconnectMessage}");
+        if (disconnectHandled) return;
+        disconnectHandled = true;
+        LogDebug(() => $"OnPeerDisconnected({peer?.Id}, {disconnectReason}) disconnect message: {disconnectMessage}");
 
         NetworkLifecycle.Instance.Stop();
 
@@ -450,7 +587,7 @@ public class NetworkClient : NetworkManager
         }
 
         LogDebug(() => $"OnPeerDisconnected() calling onDisconnect({disconnectReason}, {disconnectMessage})");
-        onDisconnect(disconnectReason, disconnectMessage);
+        onDisconnect?.Invoke(disconnectReason, disconnectMessage);
     }
 
     public override void OnNetworkLatencyUpdate(ITransportPeer peer, int latency)
@@ -494,10 +631,18 @@ public class NetworkClient : NetworkManager
             // Request Game Params and Save Game Data
             SendLoadStateUpdate(PlayerLoadingState.ReadyForGameData);
 
-            WorldStreamingInit.LoadingFinished += () =>
+            if (beginWorldSync != null)
+                WorldStreamingInit.LoadingFinished -= beginWorldSync;
+            beginWorldSync = () =>
             {
+                WorldStreamingInit.LoadingFinished -= beginWorldSync;
+                beginWorldSync = null;
                 LogDebug(() => "Loading finished, beginning sync");
-                CoroutineManager.Instance.StartCoroutine(SyncWorldState());
+                if (stopped) return;
+                worldSyncRoutine?.Dispose();
+                worldSyncRoutine = new GuardedRoutine(SyncWorldState(), FailWorldSync);
+                CoroutineManager.Instance.StartCoroutine(worldSyncRoutine);
+                if (stopped) return;
 
                 if (WorldMover.Instance.playerTracker != null)
                 {
@@ -512,6 +657,7 @@ public class NetworkClient : NetworkManager
                     }
                 }
             };
+            WorldStreamingInit.LoadingFinished += beginWorldSync;
 
             return;
         }
@@ -1134,7 +1280,11 @@ public class NetworkClient : NetworkManager
         if (!packet.IsTeleporting)
             trainCar.MoveToTrackWithCarUncouple(networkedRailTrack.RailTrack, packet.Position + WorldMover.currentMove, packet.Forward);
         else
-            LogDebug(() => $"OnClientboundMoveTrainPacket() netId: {packet.NetId} Attempting to move train, teleport not implemented");
+        {
+            trainCar.MoveToTrack(networkedRailTrack.RailTrack, packet.Position + WorldMover.currentMove, packet.Forward);
+            trainCar.GetComponent<TrainCarInteriorPhysics>()?.SyncPosition();
+            SendTrainSyncRequest(packet.NetId);
+        }
     }
 
     private void OnClientboundWindowsBrokenPacket(ClientboundWindowsBrokenPacket packet)
@@ -1333,7 +1483,8 @@ public class NetworkClient : NetworkManager
         //    return debug;
         //});
 
-        //NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, null);
+        if (!NetworkedItemManager.Instance.ReceiveSnapshots(packet.Items, null))
+            FailWorldSync(new InvalidOperationException("Item update queue exceeded its safety limit."));
     }
 
     private void OnCommonPaintThemePacket(CommonPaintThemePacket packet)
@@ -1485,8 +1636,8 @@ public class NetworkClient : NetworkManager
     private void SendLoadStateUpdate(PlayerLoadingState newState)
     {
         Log($"Sending Load State {newState}");
-        SendPacketToServer(new ServerboundLoadStateUpdatePacket { LoadState = newState }, DeliveryMethod.ReliableOrdered);
         LoadingState = newState;
+        SendPacketToServer(new ServerboundLoadStateUpdatePacket { LoadState = newState }, DeliveryMethod.ReliableOrdered);
     }
 
     public void SendPlayerPosition(PlayerTrackingData trackingData, PlayerPostureFlags posture, bool isOnCar, ushort carId, bool reliable)
@@ -1809,13 +1960,35 @@ public class NetworkClient : NetworkManager
         }, DeliveryMethod.ReliableUnordered);
     }
 
-    public void SendLicensePurchaseRequest(string id, bool isJobLicense)
+    public void SendLicensePurchaseRequest(uint ticketId, string id, bool isJobLicense)
     {
         SendPacketToServer(new ServerboundLicensePurchaseRequestPacket
         {
+            TicketId = ticketId,
             Id = id,
             IsJobLicense = isJobLicense
         }, DeliveryMethod.ReliableUnordered);
+    }
+
+    /// <summary>Requests a non-binding server quote. Does not charge funds or spawn items.</summary>
+    public void SendShopQuoteRequest(uint ticketId, ushort registerNetId, string[] itemIds, int[] quantities)
+    {
+        SendPacketToServer(new ServerboundShopQuoteRequestPacket
+        {
+            TicketId = ticketId,
+            RegisterNetId = registerNetId,
+            ItemIds = itemIds,
+            Quantities = quantities
+        }, DeliveryMethod.ReliableOrdered);
+    }
+
+    public void SendShopPurchaseRequest(uint ticketId, string operationId, ushort registerNetId, string[] itemIds, int[] quantities)
+    {
+        SendPacketToServer(new ServerboundShopPurchaseRequestPacket
+        {
+            TicketId = ticketId, OperationId = operationId, RegisterNetId = registerNetId,
+            ItemIds = itemIds, Quantities = quantities
+        }, DeliveryMethod.ReliableOrdered);
     }
 
     public void SendJobValidateRequest(NetworkedJob job, NetworkedStationController station)
@@ -1891,8 +2064,12 @@ public class NetworkClient : NetworkManager
         //SendPacketToServer(new CommonItemChangePacket { Items = items },
         //    DeliveryMethod.ReliableUnordered);
 
-        SendNetSerializablePacketToServer(new CommonItemChangePacket { Items = items },
-                DeliveryMethod.ReliableOrdered);
+        for (int offset = 0; offset < items.Count; offset += NetworkedItemManager.MaxClientBatchItems)
+        {
+            int count = Math.Min(NetworkedItemManager.MaxClientBatchItems, items.Count - offset);
+            SendNetSerializablePacketToServer(new CommonItemChangePacket { Items = items.GetRange(offset, count) },
+                    DeliveryMethod.ReliableOrdered);
+        }
     }
 
     public void SendPaintThemeChange(NetworkedTrainCar netTraincar, TrainCarPaint.Target targetArea, uint themeId)
@@ -1943,3 +2120,4 @@ public class NetworkClient : NetworkManager
     }
     #endregion
 }
+

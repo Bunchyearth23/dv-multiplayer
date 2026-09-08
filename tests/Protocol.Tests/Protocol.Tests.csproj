@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Multiplayer/Networking/Data/Train/TrainCompositionPolicy.cs" Link="Production/TrainCompositionPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Train/FastTravelOperation.cs" Link="Production/FastTravelOperation.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/Train/ServerboundFastTravelPacket.cs" Link="Production/ServerboundFastTravelPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/Train/ClientboundFastTravelPacket.cs" Link="Production/ClientboundFastTravelPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Player/PlayerTrackingData.cs" Link="Production/PlayerTrackingData.cs" />
+    <Compile Include="../../Multiplayer/Networking/Serialization/Vector2Serializer.cs" Link="Production/Vector2Serializer.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/ServerActionPolicy.cs" Link="Production/ServerActionPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Train/CouplerInteractionType.cs" Link="Production/CouplerInteractionType.cs" />
+    <Compile Include="../../Multiplayer/Utils/LoadingRecovery.cs" Link="Production/LoadingRecovery.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/ClientboundWorldItemManifestPacket.cs" Link="Production/ClientboundWorldItemManifestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundWorldItemRecoveryPacket.cs" Link="Production/ServerboundWorldItemRecoveryPacket.cs" />
+    <Compile Include="../../Multiplayer/Utils/TickSnapshotBuffer.cs" Link="Production/TickSnapshotBuffer.cs" />
+    <Compile Include="../../Multiplayer/Utils/NetworkCampaignMetrics.cs" Link="Production/NetworkCampaignMetrics.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/ProtocolCompatibility.cs" Link="Production/ProtocolCompatibility.cs" />
+    <Compile Include="../../Multiplayer/Utils/BoundedBatchQueue.cs" Link="Production/BoundedBatchQueue.cs" />
+    <Compile Include="../../Multiplayer/Utils/ScopedRoutine.cs" Link="Production/ScopedRoutine.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/StartingInventoryGrants.cs" Link="Production/StartingInventoryGrants.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/InventorySlotAllocator.cs" Link="Production/InventorySlotAllocator.cs" />
+    <PackageReference Include="LiteNetLib" Version="1.3.1" />
+    <Reference Include="UnityEngine.CoreModule" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Numerics" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/PlayerItemSaveData.cs" Link="Production/PlayerItemSaveData.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/PlayerInventorySaveCodec.cs" Link="Production/PlayerInventorySaveCodec.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ItemInventoryLocation.cs" Link="Production/ItemInventoryLocation.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/ClientboundInventoryRestorePacket.cs" Link="Production/ClientboundInventoryRestorePacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ItemUpdateData.cs" Link="Production/ItemUpdateData.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ItemActionPolicy.cs" Link="Production/ItemActionPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopCartPolicy.cs" Link="Production/ShopCartPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPurchaseLedger.cs" Link="Production/ShopPurchaseLedger.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPurchaseOperation.cs" Link="Production/ShopPurchaseOperation.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/ShopPurchaseResponse.cs" Link="Production/ShopPurchaseResponse.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/LicensePurchaseResponse.cs" Link="Production/LicensePurchaseResponse.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundLicensePurchaseRequestPacket.cs" Link="Production/ServerboundLicensePurchaseRequestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundShopPurchaseRequestPacket.cs" Link="Production/ServerboundShopPurchaseRequestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/IRpcResponse.cs" Link="Production/IRpcResponse.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/RpcTicket.cs" Link="Production/RpcTicket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/RpcTicketCollection.cs" Link="Production/RpcTicketCollection.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/ShopQuoteResponse.cs" Link="Production/ShopQuoteResponse.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundShopQuoteRequestPacket.cs" Link="Production/ServerboundShopQuoteRequestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Common/CommonItemChangePacket.cs" Link="Production/CommonItemChangePacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Serialization/Vector3Serializer.cs" Link="Production/Vector3Serializer.cs" />
+    <Compile Include="../../Multiplayer/Networking/Serialization/QuaternionSerializer.cs" Link="Production/QuaternionSerializer.cs" />
+    <Compile Include="../../Multiplayer/Components/Networking/World/ItemState.cs" Link="Production/ItemState.cs" />
+    <Compile Include="../../Multiplayer/Utils/PacketCompression.cs" Link="Production/PacketCompression.cs" />
+    <Compile Include="../../Multiplayer/Utils/IdPool.cs" Link="Production/IdPool.cs" />
+    <Compile Include="../../Multiplayer/Utils/LoadingDeadline.cs" Link="Production/LoadingDeadline.cs" />
+    <Compile Include="../../Multiplayer/Utils/GuardedRoutine.cs" Link="Production/GuardedRoutine.cs" />
+    <Compile Include="../../Multiplayer/Utils/LoadingManifest.cs" Link="Production/LoadingManifest.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/Jobs/ClientboundJobManifestPacket.cs" Link="Production/ClientboundJobManifestPacket.cs" />
+  </ItemGroup>
+</Project>
+

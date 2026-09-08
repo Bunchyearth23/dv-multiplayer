@@ -22,6 +22,12 @@
   </p>
 </div>
 
+## BDVM integration branch
+
+This public fork is maintained at [Bunchyearth23/dv-multiplayer](https://github.com/Bunchyearth23/dv-multiplayer). The `bdvm-integration` branch contains the host-authoritative protocol, persistence, recovery and stable player-identity work consumed by `BDVM.MultiplayerBridge`. The original upstream is [AMacro/dv-multiplayer](https://github.com/AMacro/dv-multiplayer), itself continuing [Insprill/dv-multiplayer](https://github.com/Insprill/dv-multiplayer).
+
+`BDVM.MultiplayerBridge` does not bundle this mod. Users who need BDVM multiplayer features must install a compatible build of this fork; solo BDVM does not require it.
+
 
 
 

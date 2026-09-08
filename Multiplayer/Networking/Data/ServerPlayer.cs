@@ -43,6 +43,8 @@ public class ServerPlayer : IDisposable
     public string CharacterId { get; set; }
     public bool IsVR { get; }
     public uint LastHighPingTickLogged { get; set; }
+    internal long NextTrainRepairAt { get; set; }
+    internal readonly Train.FastTravelOperation FastTravel = new();
 
     public PlayerTrackingData TrackingData { get; set; }
     public PlayerPostureFlags Posture { get; set; }        // already exists — keep
@@ -94,9 +96,13 @@ public class ServerPlayer : IDisposable
         }
     }
 
-    public Dictionary<NetworkedItem, uint> KnownItems { get; private set; } = new Dictionary<NetworkedItem, uint>(); //NetworkedItem, last updated tick
+    public Dictionary<NetworkedItem, ulong> KnownItems { get; private set; } = new Dictionary<NetworkedItem, ulong>(); // NetworkedItem, last delivered revision
     public Dictionary<NetworkedItem, float> NearbyItems { get; private set; } = new Dictionary<NetworkedItem, float>(); //NetworkedItem, time since near the item
     public HashSet<ushort> OwnedItems { get; private set; } = new HashSet<ushort>();
+    public bool InventoryRestoreComplete { get; set; }
+    internal HashSet<ushort> InitialWorldItems { get; set; }
+    internal LoadingRecovery WorldItemRecovery { get; } = new();
+    public global::Multiplayer.Networking.Data.Items.PlayerItemSaveData[] InventoryRestoreData { get; set; }
     public StorageBase Storage { get; set; } = new StorageBase();
 
     private Vector3 _lastWorldPos = Vector3.zero;

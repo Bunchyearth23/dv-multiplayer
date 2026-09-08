@@ -364,6 +364,7 @@ public class NetworkedStationController : IdMonoBehaviour<uint, NetworkedStation
         StartCoroutine(UpdateCarPlates(carNetIds, newJob.ID));
 
         Multiplayer.Log($"Added NetworkedJob {newJob.ID} to NetworkedStationController {StationController.logicStation.ID}");
+        NetworkLifecycle.Instance.Client?.NotifyInitialJobApplied(jobData.NetID);
     }
 
     private IEnumerator DelayCreateJob(JobData jobData)

@@ -257,6 +257,18 @@ public class NetworkedPluggableObject : IdMonoBehaviour<ushort, NetworkedPluggab
 
     public bool ValidateInteraction(CommonPitStopPlugInteractionPacket packet, ServerPlayer player)
     {
+        if (player == null || PluggableObject == null ||
+            !Enum.IsDefined(typeof(PlugInteractionType), packet.InteractionType)) return false;
+        bool releasing = packet.InteractionType == PlugInteractionType.Dropped && HeldBy == player;
+        if (!releasing && !NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientService)) return false;
+        if (packet.InteractionType == PlugInteractionType.Dropped)
+        {
+            if (!packet.Position.HasValue || !packet.Rotation.HasValue ||
+                !ServerActionPolicy.InRange((packet.Position.Value - player.AbsoluteWorldPosition).sqrMagnitude, 10f)) return false;
+            var rotation = packet.Rotation.Value;
+            float norm = rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w;
+            if (!ServerActionPolicy.Finite(norm) || norm < 0.5f || norm > 1.5f) return false;
+        }
         PlugInteractionType interactionType = packet.InteractionType;
 
         if (interactionType == PlugInteractionType.Rejected || interactionType == PlugInteractionType.Yanked)
@@ -314,7 +326,7 @@ public class NetworkedPluggableObject : IdMonoBehaviour<ushort, NetworkedPluggab
             //verify distance to socket
             float sqrDistance = (socket.transform.GetWorldAbsolutePosition() - PluggableObject.transform.GetWorldAbsolutePosition()).sqrMagnitude;
             Multiplayer.LogDebug(() => $"NetworkedPluggableObject.ValidateInteraction() NetId: {NetId}, {interactionType}, trainCar: [{networkedTrainCar.CurrentID}, {packet.TrainCarNetId}], socket No.: {packet.SocketIndex} player pos: {player.AbsoluteWorldPosition}, plug pos: {PluggableObject.transform.GetWorldAbsolutePosition()}, socket pos: {socket.transform.GetWorldAbsolutePosition()}, sqrDistance: {sqrDistance}, Dock distance: {DOCK_SQR_DISTANCE}");
-            if (sqrDistance > DOCK_SQR_DISTANCE)
+            if (!ServerActionPolicy.InRange(sqrDistance, Mathf.Sqrt(DOCK_SQR_DISTANCE)))
             {
                 NetworkLifecycle.Instance.Server.LogWarning($"{player.Username} attempted to dock a plug into {networkedTrainCar.TrainCar.ID}, but socket is too far away!");
                 return false;
@@ -326,8 +338,9 @@ public class NetworkedPluggableObject : IdMonoBehaviour<ushort, NetworkedPluggab
             {
                 //verify distance to socket
                 var socket = PluggableObject.startAttachedTo;
+                if (socket == null) return false;
                 float sqrDistance = (socket.transform.GetWorldAbsolutePosition() - PluggableObject.transform.GetWorldAbsolutePosition()).sqrMagnitude;
-                if (sqrDistance > DOCK_SQR_DISTANCE)
+                if (!ServerActionPolicy.InRange(sqrDistance, Mathf.Sqrt(DOCK_SQR_DISTANCE)))
                 {
                     NetworkLifecycle.Instance.Server.LogWarning($"{player.Username} attempted to dock a plug into the stand, but socket is too far away!");
                     return false;
@@ -342,7 +355,7 @@ public class NetworkedPluggableObject : IdMonoBehaviour<ushort, NetworkedPluggab
                 float sqrDistance = (player.AbsoluteWorldPosition - PluggableObject.transform.GetWorldAbsolutePosition()).sqrMagnitude;
 
                 Multiplayer.LogDebug(() => $"NetworkedPluggableObject.ValidateInteraction() NetId: {NetId}, {interactionType}, player pos: {player.AbsoluteWorldPosition}, plug pos: {PluggableObject.transform.GetWorldAbsolutePosition()}, sqrDistance: {sqrDistance}, Raycast distance: {GRAB_SQR_DISTANCE}");
-                if (sqrDistance > GRAB_SQR_DISTANCE)
+                if (!ServerActionPolicy.InRange(sqrDistance, Mathf.Sqrt(GRAB_SQR_DISTANCE)))
                 {
                     NetworkLifecycle.Instance.Server.LogWarning($"{player.Username} attempted to interact with a plug that is too far away!");
                     return false;

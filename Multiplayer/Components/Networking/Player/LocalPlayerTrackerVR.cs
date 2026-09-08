@@ -12,6 +12,7 @@ internal class LocalPlayerTrackerVR : LocalPlayerTrackerBase
 
     GameObject controllerLeftHand;
     GameObject controllerRightHand;
+    private float nextFullPoseAt;
 
     Vector3 lastLeftHandPosition = Vector3.zero;
     Quaternion lastLeftHandRotation = Quaternion.identity;
@@ -61,18 +62,21 @@ internal class LocalPlayerTrackerVR : LocalPlayerTrackerBase
         // reconstruct world positions using selfTransform.position + targetRotation * localOffset,
         // where targetRotation is also derived from the camera yaw.
         Quaternion inverseCameraYaw = GetInverseCameraYaw();
+        // Periodic full poses bootstrap stationary hands and recover lost delta packets/late joins.
+        bool fullPose = Time.realtimeSinceStartup >= nextFullPoseAt;
+        if (fullPose) nextFullPoseAt = Time.realtimeSinceStartup + 1f;
 
         if (controllerLeftHand != null)
         {
             Vector3 leftHandPosition = inverseCameraYaw * (controllerLeftHand.transform.position - PlayerManager.PlayerTransform.position);
             Quaternion leftHandRotation = inverseCameraYaw * controllerLeftHand.transform.rotation;
 
-            if (Vector3.Distance(leftHandPosition, lastLeftHandPosition) > HAND_POSITION_THRESHOLD)
+            if (fullPose || Vector3.Distance(leftHandPosition, lastLeftHandPosition) > HAND_POSITION_THRESHOLD)
             {
                 data.LeftHandPosition = leftHandPosition;
                 lastLeftHandPosition = leftHandPosition;
             }
-            if (Quaternion.Angle(leftHandRotation, lastLeftHandRotation) > HAND_ROTATION_THRESHOLD)
+            if (fullPose || Quaternion.Angle(leftHandRotation, lastLeftHandRotation) > HAND_ROTATION_THRESHOLD)
             {
                 data.LeftHandRotation = leftHandRotation;
                 lastLeftHandRotation = leftHandRotation;
@@ -84,12 +88,12 @@ internal class LocalPlayerTrackerVR : LocalPlayerTrackerBase
             Vector3 rightHandPosition = inverseCameraYaw * (controllerRightHand.transform.position - PlayerManager.PlayerTransform.position);
             Quaternion rightHandRotation = inverseCameraYaw * controllerRightHand.transform.rotation;
 
-            if (Vector3.Distance(rightHandPosition, lastRightHandPosition) > HAND_POSITION_THRESHOLD)
+            if (fullPose || Vector3.Distance(rightHandPosition, lastRightHandPosition) > HAND_POSITION_THRESHOLD)
             {
                 data.RightHandPosition = rightHandPosition;
                 lastRightHandPosition = rightHandPosition;
             }
-            if (Quaternion.Angle(rightHandRotation, lastRightHandRotation) > HAND_ROTATION_THRESHOLD)
+            if (fullPose || Quaternion.Angle(rightHandRotation, lastRightHandRotation) > HAND_ROTATION_THRESHOLD)
             {
                 data.RightHandRotation = rightHandRotation;
                 lastRightHandRotation = rightHandRotation;

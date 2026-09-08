@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Multiplayer.API;
 
-public class ServerPlayerWrapper : IPlayer
+public class ServerPlayerWrapper : IPlayer, IPersistentPlayerIdentity
 {
     internal readonly ServerPlayer _serverPlayer;
     private readonly bool _isHost;
@@ -19,6 +19,7 @@ public class ServerPlayerWrapper : IPlayer
     }
 
     public byte PlayerId => _serverPlayer.PlayerId;
+    public System.Guid PersistentId => _serverPlayer.Guid;
 
     public string Username
     {

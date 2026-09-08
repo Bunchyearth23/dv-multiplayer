@@ -11,8 +11,7 @@ namespace Multiplayer.Components.Networking;
 
 public class RpcManager : SingletonBehaviour<RpcManager>
 {
-    private uint nextTicketId = 1;
-    private readonly Dictionary<uint, RpcTicket> activeTickets = [];
+    private readonly RpcTicketCollection activeTickets = new(ex => Multiplayer.LogError($"RPC callback failed: {ex}"));
     private readonly Dictionary<Type, uint> responseTypeToHash = [];
     private readonly Dictionary<uint, Type> hashToResponseType = [];
 
@@ -22,51 +21,17 @@ public class RpcManager : SingletonBehaviour<RpcManager>
         DiscoverResponseTypes();
     }
 
-    public RpcTicket CreateTicket(float timeOut)
-    {
-        uint ticketId = nextTicketId++;
-        var ticket = new RpcTicket(ticketId, timeOut);
-        activeTickets[ticketId] = ticket;
-        return ticket;
-    }
+    public RpcTicket CreateTicket(float timeOut) => activeTickets.Create(timeOut);
 
     public void ResolveTicket(uint ticketId, IRpcResponse response)
     {
-        Multiplayer.LogDebug(() => $"Resolving ticket {ticketId} with response {response.GetType().Name}");
-        if (activeTickets.TryGetValue(ticketId, out var ticket))
-        {
-            Multiplayer.LogDebug(() => $"Found active ticket {ticketId}, resolving...");
-            ticket.Resolve(response);
-            activeTickets.Remove(ticketId);
-        }
-        else
-        {
-            Multiplayer.LogWarning($"Attempted to resolve non-existent or expired ticket with ID {ticketId}");
-        }
+        if (!activeTickets.Resolve(ticketId, response))
+            Multiplayer.LogWarning($"Attempted to resolve an unknown RPC ticket {ticketId}, or response was null.");
     }
 
-    protected void Update()
-    {
-        if (activeTickets.Count == 0)
-            return;
+    public void CancelAll() => activeTickets.CancelAll();
 
-        List<uint> expiredTickets = [];
-
-        foreach (var kvp in activeTickets)
-        {
-            var ticket = kvp.Value;
-            ticket.CheckExpiry();
-
-            if (ticket.IsExpired)
-                expiredTickets.Add(kvp.Key);
-        }
-
-        foreach (var ticketId in expiredTickets)
-        {
-            Multiplayer.LogDebug(() => $"Removing expired ticket {ticketId}");
-            activeTickets.Remove(ticketId);
-        }
-    }
+    protected void Update() => activeTickets.Poll();
 
     public uint GetResponseTypeHash(IRpcResponse response)
     {

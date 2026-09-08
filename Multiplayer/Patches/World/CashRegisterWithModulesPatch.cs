@@ -34,9 +34,6 @@ public class CashRegisterWithModulesPatch
         var reg = __instance.transform.position;
         var sqrMag = (player - reg).sqrMagnitude;
         Multiplayer.LogDebug(() => $"CashRegisterWithModules.OnBuyPressed() player pos: {player} register pos: {reg}, sqrMag: {sqrMag}");
-        if (NetworkLifecycle.Instance.IsHost())
-            return true;
-
         if (!NetworkedCashRegisterWithModules.TryGet(__instance, out var netCashRegister))
         {
             Multiplayer.LogWarning($"CashRegisterWithModules.OnBuyPressed({__instance.GetObjectPath()}) NetworkedCashRegisterWithModules not found!");
@@ -44,6 +41,12 @@ public class CashRegisterWithModulesPatch
         }
 
         if (netCashRegister.IsShopRegister)
+        {
+            CoroutineManager.Instance.StartCoroutine(netCashRegister.BuyShop());
+            return false;
+        }
+
+        if (NetworkLifecycle.Instance.IsHost())
             return true;
 
         CoroutineManager.Instance.StartCoroutine(netCashRegister.Buy());
@@ -63,6 +66,9 @@ public class CashRegisterWithModulesPatch
             Multiplayer.LogWarning($"CashRegisterWithModules.OnBuyPressed_Postfix({__instance.GetObjectPath()}) NetworkedCashRegisterWithModules not found!");
             return;
         }
+
+        if (netCashRegister.IsShopRegister)
+            return;
 
         // Send buy action to all clients
         NetworkLifecycle.Instance.Server.SendCashRegisterAction(new CommonCashRegisterWithModulesActionPacket

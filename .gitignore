@@ -308,4 +308,8 @@ MultiplayerAssets/ProjectSettings/*
 !MultiplayerAssets/Packages
 /Lobby Servers/Rust Server/target
 *.pem
-/docs
+/docs/*
+!/docs/INDEX.md
+/build-validation.log
+/.tools/
+/.install-source-*/

@@ -73,7 +73,7 @@ public class NetworkedGenericSwitch : MonoBehaviour
     #region server
     public void Server_ReceiveSwitchState(bool isOn, ServerPlayer player)
     {
-        if (!transform.PlayerCanReach(player))
+        if (!NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientService) || !transform.PlayerCanReach(player))
         {
             Multiplayer.LogWarning($"Player \"{player.Username}\" tried to change switch [\"{Switch.persistenceKey}\", {NetId}] state but is too far away.");
             NetworkLifecycle.Instance.Server.SendGenericSwitchState(NetId, Switch.IsOn, player);
