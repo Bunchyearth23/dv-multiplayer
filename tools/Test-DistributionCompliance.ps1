@@ -2,14 +2,19 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $workspacePath = Split-Path $PSScriptRoot -Parent
-$expectedLicenseHash = 'adcb860af54915edc16bd1ac0dbf067940e1642d23e53320232f2945b345fdf0'
+$expectedNormalizedLicenseHash = 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4'
 
 $licensePath = Join-Path $workspacePath 'LICENSE'
 $noticePath = Join-Path $workspacePath 'NOTICE'
 $projectPath = Join-Path $workspacePath 'Multiplayer/Multiplayer.csproj'
 $postBuildPath = Join-Path $workspacePath 'post-build.ps1'
 
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $licensePath).Hash.ToLowerInvariant() -ne $expectedLicenseHash) {
+$licenseText = [System.IO.File]::ReadAllText($licensePath).Replace("`r`n", "`n").Replace("`r", "`n")
+$licenseBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($licenseText)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try { $actualLicenseHash = ([System.BitConverter]::ToString($sha256.ComputeHash($licenseBytes))).Replace('-', '').ToLowerInvariant() }
+finally { $sha256.Dispose() }
+if ($actualLicenseHash -ne $expectedNormalizedLicenseHash) {
     throw 'LICENSE differs from the canonical upstream Apache-2.0 text tracked by this fork.'
 }
 
