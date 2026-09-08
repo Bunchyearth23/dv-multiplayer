@@ -36,6 +36,8 @@ public struct PlayerTrackingData
 
         RightFootPosition = 32768,
         RightFootRotation = 65536,
+        LeftHandOpenPresent = 131072,
+        RightHandOpenPresent = 262144,
     }
 
     private DataFlags Flags
@@ -53,11 +55,13 @@ public struct PlayerTrackingData
 
             if (LeftHandPosition.HasValue) flags |= DataFlags.LeftHandPosition;
             if (LeftHandRotation.HasValue) flags |= DataFlags.LeftHandRotation;
-            if (LeftHandOpen.HasValue && LeftHandOpen == false) flags |= DataFlags.LeftHandClosed;
+            if (LeftHandOpen.HasValue) flags |= DataFlags.LeftHandOpenPresent;
+            if (LeftHandOpen == false) flags |= DataFlags.LeftHandClosed;
 
             if (RightHandPosition.HasValue) flags |= DataFlags.RightHandPosition;
             if (RightHandRotation.HasValue) flags |= DataFlags.RightHandRotation;
-            if (RightHandOpen.HasValue && RightHandOpen == false) flags |= DataFlags.RightHandClosed;
+            if (RightHandOpen.HasValue) flags |= DataFlags.RightHandOpenPresent;
+            if (RightHandOpen == false) flags |= DataFlags.RightHandClosed;
 
             if (HipPosition.HasValue) flags |= DataFlags.HipPosition;
             if (HipRotation.HasValue) flags |= DataFlags.HipRotation;
@@ -156,13 +160,14 @@ public struct PlayerTrackingData
             LeftHandPosition = flags.HasFlag(DataFlags.LeftHandPosition) ? Vector3Serializer.Deserialize(reader) : null,
             LeftHandRotation = flags.HasFlag(DataFlags.LeftHandRotation) ? QuaternionSerializer.Deserialize(reader) : null,
             // If flag is missing hand is open, if flag is present hand is closed
-            LeftHandOpen = !flags.HasFlag(DataFlags.LeftHandClosed),
+            LeftHandOpen = flags.HasFlag(DataFlags.LeftHandOpenPresent)
+                ? !flags.HasFlag(DataFlags.LeftHandClosed) : null,
 
             RightHandPosition = flags.HasFlag(DataFlags.RightHandPosition) ? Vector3Serializer.Deserialize(reader) : null,
             RightHandRotation = flags.HasFlag(DataFlags.RightHandRotation) ? QuaternionSerializer.Deserialize(reader) : null,
             // If flag is missing hand is open, if flag is present hand is closed
-            RightHandOpen = !flags.HasFlag(DataFlags.RightHandClosed
-            ),
+            RightHandOpen = flags.HasFlag(DataFlags.RightHandOpenPresent)
+                ? !flags.HasFlag(DataFlags.RightHandClosed) : null,
 
             HipPosition = flags.HasFlag(DataFlags.HipPosition) ? Vector3Serializer.Deserialize(reader) : null,
             HipRotation = flags.HasFlag(DataFlags.HipRotation) ? QuaternionSerializer.Deserialize(reader) : null,
@@ -187,10 +192,10 @@ public struct PlayerTrackingData
             SitHeight = delta.SitHeight ?? SitHeight,
             LeftHandPosition = delta.LeftHandPosition ?? LeftHandPosition,
             LeftHandRotation = delta.LeftHandRotation ?? LeftHandRotation,
-            LeftHandOpen = delta.LeftHandOpen == null ? true : delta.LeftHandOpen,
+            LeftHandOpen = delta.LeftHandOpen ?? LeftHandOpen,
             RightHandPosition = delta.RightHandPosition ?? RightHandPosition,
             RightHandRotation = delta.RightHandRotation ?? RightHandRotation,
-            RightHandOpen = delta.RightHandOpen == null ? true : delta.RightHandOpen,
+            RightHandOpen = delta.RightHandOpen ?? RightHandOpen,
             HipPosition = delta.HipPosition ?? HipPosition,
             HipRotation = delta.HipRotation ?? HipRotation,
             LeftFootPosition = delta.LeftFootPosition ?? LeftFootPosition,

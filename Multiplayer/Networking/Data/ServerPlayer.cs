@@ -102,6 +102,10 @@ public class ServerPlayer : IDisposable
     public bool InventoryRestoreComplete { get; set; }
     internal HashSet<ushort> InitialWorldItems { get; set; }
     internal LoadingRecovery WorldItemRecovery { get; } = new();
+    internal HashSet<ushort> InitialTrainCars { get; set; }
+    internal uint InitialTrainsetCount { get; set; }
+    internal LoadingRecovery TrainRecovery { get; } = new();
+    internal LoadingRetry TrainManifestRecovery { get; } = new();
     public global::Multiplayer.Networking.Data.Items.PlayerItemSaveData[] InventoryRestoreData { get; set; }
     public StorageBase Storage { get; set; } = new StorageBase();
 

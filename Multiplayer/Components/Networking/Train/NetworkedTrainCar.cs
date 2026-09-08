@@ -836,6 +836,31 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         return false;
     }
 
+    public bool Server_ValidateClientFusesPacket(ServerPlayer player, CommonTrainFusesPacket packet)
+    {
+        if (NetworkLifecycle.Instance.Server.IsFastTravelCar(NetId) || !hasSimFlow)
+            return false;
+
+        foreach (uint fuseNetId in packet.FuseIds)
+        {
+            var fuseId = GetFuse(fuseNetId);
+            if (!simulationFlow.TryGetFuse(fuseId, out Fuse _))
+            {
+                NetworkLifecycle.Instance.Server.LogWarning($"Player {player.Username} sent unknown fuse [{fuseId}, {fuseNetId}] for [{CurrentID}, {NetId}]");
+                Common_DirtyFuses(packet.FuseIds);
+                return false;
+            }
+        }
+
+        if (player.CarId == NetId ||
+            (player.WorldPosition - transform.position).sqrMagnitude <= CarLengthSq)
+            return true;
+
+        NetworkLifecycle.Instance.Server.LogWarning($"Player {player.Username} tried to change fuses on a car they are not in or near!");
+        Common_DirtyFuses(packet.FuseIds);
+        return false;
+    }
+
     private void Server_BogieTrackChanged(RailTrack arg1, Bogie arg2)
     {
         BogieTracksDirty = true;
@@ -1078,6 +1103,14 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public void Server_ReceiveAuthorityRequest(uint portNetId, ServerPlayer player, bool requestAuthority)
     {
+        var portId = GetPort(portNetId);
+        if (!hasSimFlow || !simulationFlow.TryGetPort(portId, out Port port) || port.valueType != PortValueType.CONTROL)
+        {
+            NetworkLifecycle.Instance.Server.LogWarning($"Player \"{player.Username}\" requested authority for unknown or non-control port [{portId}, {portNetId}] on {CurrentID}");
+            NetworkLifecycle.Instance.Server.SendTrainControlAuthorityUpdate(NetId, portNetId, ControlAuthorityState.Denied, player);
+            return;
+        }
+
         portAuthority.TryGetValue(portNetId, out var currentAuth);
 
         if (requestAuthority)

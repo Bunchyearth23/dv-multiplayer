@@ -30,6 +30,32 @@ internal static class ServerActionPolicyTests
         Check(ServerActionPolicy.Index(2, 3));
         Check(!ServerActionPolicy.Index(0, 0));
     }
+    public static void JunctionBranchesUseAuthoritativeCardinality()
+    {
+        Check(!ServerActionPolicy.JunctionBranch(0, 0));
+        Check(!ServerActionPolicy.JunctionBranch(-1, 3));
+        Check(ServerActionPolicy.JunctionBranch(0, 1));
+        Check(ServerActionPolicy.JunctionBranch(2, 3));
+        Check(!ServerActionPolicy.JunctionBranch(3, 3));
+    }
+    public static void ParallelPayloadsAreBoundedAndAligned()
+    {
+        Check(ServerActionPolicy.ParallelPayload(1, 1));
+        Check(ServerActionPolicy.ParallelPayload(256, 256));
+        Check(!ServerActionPolicy.ParallelPayload(0, 0));
+        Check(!ServerActionPolicy.ParallelPayload(2, 1));
+        Check(!ServerActionPolicy.ParallelPayload(257, 257));
+        Check(!ServerActionPolicy.ParallelPayload(1, 1, 0));
+    }
+    public static void RerailMustMatchTrackGeometry()
+    {
+        Check(ServerActionPolicy.TrackAlignment(0f, 1f));
+        Check(ServerActionPolicy.TrackAlignment(16f, 0.5f));
+        Check(!ServerActionPolicy.TrackAlignment(16.01f, 1f));
+        Check(!ServerActionPolicy.TrackAlignment(0f, 0.49f));
+        Check(!ServerActionPolicy.TrackAlignment(float.NaN, 1f));
+        Check(!ServerActionPolicy.TrackAlignment(0f, float.PositiveInfinity));
+    }
     public static void RemoteFlagsCannotSmugglePhysicalActions()
     {
         Check(ServerActionPolicy.CouplerFlags(4097, out var remote) && remote);

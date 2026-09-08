@@ -9,6 +9,7 @@ using Multiplayer.Networking.Data.Train;
 using Multiplayer.Networking.Data.World;
 using Multiplayer.Networking.Serialization;
 using Multiplayer.Networking.TransportLayers;
+using Multiplayer.Utils;
 using System;
 using System.Net;
 using System.Net.Sockets;
@@ -30,6 +31,7 @@ public abstract class NetworkManager
     public NetStatistics Statistics => transport.Statistics;
     public bool IsRunning => transport.IsRunning;
     public bool IsProcessingPacket { get; private set; }
+    public NetworkTrafficMetrics CampaignTraffic { get; } = new();
 
     protected NetworkManager(Settings settings)
     {
@@ -139,12 +141,18 @@ public abstract class NetworkManager
 
     protected void SendPacket<T>(ITransportPeer peer, T packet, DeliveryMethod deliveryMethod) where T : class, new()
     {
-        peer?.Send(WritePacket(packet), deliveryMethod);
+        if (peer == null) return;
+        var writer = WritePacket(packet);
+        CampaignTraffic.Record("out", peer.Id, typeof(T).Name, writer.Length);
+        peer.Send(writer, deliveryMethod);
     }
 
     protected void SendNetSerializablePacket<T>(ITransportPeer peer, T packet, DeliveryMethod deliveryMethod) where T : INetSerializable, new()
     {
-        peer?.Send(WriteNetSerializablePacket(packet), deliveryMethod);
+        if (peer == null) return;
+        var writer = WriteNetSerializablePacket(packet);
+        CampaignTraffic.Record("out", peer.Id, typeof(T).Name, writer.Length);
+        peer.Send(writer, deliveryMethod);
     }
 
     //protected void SendUnconnectedPacket<T>(T packet, string ipAddress, int port) where T : class, new()
@@ -160,6 +168,7 @@ public abstract class NetworkManager
         //LogDebug(() => $"NetworkManager.OnNetworkReceive()");
         try
         {
+            CampaignTraffic.Record("in", peer?.Id ?? -1, deliveryMethod + "_ch" + channel, reader.AvailableBytes);
             IsProcessingPacket = true;
             netPacketProcessor.ReadAllPackets(reader, peer);
         }

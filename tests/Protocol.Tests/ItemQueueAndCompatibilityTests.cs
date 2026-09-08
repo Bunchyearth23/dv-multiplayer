@@ -28,7 +28,7 @@ internal static class ItemQueueAndCompatibilityTests
     public static void ProtocolHandshakeSeparatesIncompatibleBuilds()
     {
         string build = ProtocolCompatibility.HandshakeBuild("2026.1");
-        Check(build == "2026.1|dvmp-protocol:3" && build != "2026.1|dvmp-protocol:2");
+        Check(build == "2026.1|dvmp-protocol:4" && build != "2026.1|dvmp-protocol:3");
         Check(build != "2026.1" && build != "2026.1|dvmp-protocol:1");
         try { ProtocolCompatibility.HandshakeBuild(""); }
         catch (ArgumentException) { return; }

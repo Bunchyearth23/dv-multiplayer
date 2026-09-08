@@ -73,11 +73,8 @@ public static class Multiplayer
             var gameVer = BuildInfo.BUILD_VERSION_MAJOR.ToString() +
                 (string.IsNullOrEmpty(BuildInfo.BUILD_VERSION_SUFFIX) ? "" : "." + BuildInfo.BUILD_VERSION_SUFFIX);
 
-            bool APIcompatible = false;
-            if (Version.TryParse(APIProvider.BUILT_AGAINST_API_VERSION, out var builtVerAPI) && Version.TryParse(MultiplayerAPI.LoadedApiVersion, out var loadedVerAPI))
-            {
-                APIcompatible = loadedVerAPI >= builtVerAPI;
-            }
+            bool APIcompatible = MPAPI.Util.ApiVersionPolicy.IsCompatible(
+                APIProvider.BUILT_AGAINST_API_VERSION, MultiplayerAPI.LoadedApiVersion);
 
             Log($"\r\n\r\n" +
                 $"\tMultiplayer JSON Version: {ModEntry.Info.Version}, Internal Version: {Ver}\r\n" +

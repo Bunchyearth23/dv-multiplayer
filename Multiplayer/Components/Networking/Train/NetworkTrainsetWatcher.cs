@@ -19,7 +19,10 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
         Metrics.RecordFrame(Time.unscaledDeltaTime);
         if (Time.realtimeSinceStartup < nextMetricsReport) return;
         nextMetricsReport = Time.realtimeSinceStartup + 10f;
-        Multiplayer.Log(Metrics.Format(System.GC.GetTotalMemory(false)));
+        Multiplayer.Log(Metrics.Format(System.GC.GetTotalMemory(false), UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong()));
+        var manager = NetworkLifecycle.Instance?.Client as global::Multiplayer.Networking.Managers.NetworkManager
+            ?? NetworkLifecycle.Instance?.Server as global::Multiplayer.Networking.Managers.NetworkManager;
+        if (manager != null) Multiplayer.Log(manager.CampaignTraffic.Format());
     }
     private ClientboundTrainsetPhysicsPacket cachedSendPacket;
     private long nextRepairAt;

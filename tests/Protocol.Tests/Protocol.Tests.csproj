@@ -14,12 +14,18 @@
     <Compile Include="../../Multiplayer/Networking/Data/ServerActionPolicy.cs" Link="Production/ServerActionPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Train/CouplerInteractionType.cs" Link="Production/CouplerInteractionType.cs" />
     <Compile Include="../../Multiplayer/Utils/LoadingRecovery.cs" Link="Production/LoadingRecovery.cs" />
+    <Compile Include="../../Multiplayer/Utils/LoadingRetry.cs" Link="Production/LoadingRetry.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundRailwayStateRecoveryPacket.cs" Link="Production/ServerboundRailwayStateRecoveryPacket.cs" />
     <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/ClientboundWorldItemManifestPacket.cs" Link="Production/ClientboundWorldItemManifestPacket.cs" />
     <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundWorldItemRecoveryPacket.cs" Link="Production/ServerboundWorldItemRecoveryPacket.cs" />
     <Compile Include="../../Multiplayer/Utils/TickSnapshotBuffer.cs" Link="Production/TickSnapshotBuffer.cs" />
     <Compile Include="../../Multiplayer/Utils/NetworkCampaignMetrics.cs" Link="Production/NetworkCampaignMetrics.cs" />
+    <Compile Include="../../Multiplayer/Utils/NetworkTrafficMetrics.cs" Link="Production/NetworkTrafficMetrics.cs" />
+    <Compile Include="../../MultiplayerAPI/Util/EventDispatch.cs" Link="Production/EventDispatch.cs" />
+    <Compile Include="../../MultiplayerAPI/Util/ApiVersionPolicy.cs" Link="Production/ApiVersionPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/ProtocolCompatibility.cs" Link="Production/ProtocolCompatibility.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/LoginRequestPolicy.cs" Link="Production/LoginRequestPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/ModSetCompatibilityPolicy.cs" Link="Production/ModSetCompatibilityPolicy.cs" />
     <Compile Include="../../Multiplayer/Utils/BoundedBatchQueue.cs" Link="Production/BoundedBatchQueue.cs" />
     <Compile Include="../../Multiplayer/Utils/ScopedRoutine.cs" Link="Production/ScopedRoutine.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/StartingInventoryGrants.cs" Link="Production/StartingInventoryGrants.cs" />
@@ -43,6 +49,7 @@
     <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundLicensePurchaseRequestPacket.cs" Link="Production/ServerboundLicensePurchaseRequestPacket.cs" />
     <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/ServerboundShopPurchaseRequestPacket.cs" Link="Production/ServerboundShopPurchaseRequestPacket.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/RPCs/IRpcResponse.cs" Link="Production/IRpcResponse.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/RPCs/RpcTerminalResponse.cs" Link="Production/RpcTerminalResponse.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/RPCs/RpcTicket.cs" Link="Production/RpcTicket.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/RPCs/RpcTicketCollection.cs" Link="Production/RpcTicketCollection.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/RPCs/ShopQuoteResponse.cs" Link="Production/ShopQuoteResponse.cs" />
@@ -57,6 +64,9 @@
     <Compile Include="../../Multiplayer/Utils/GuardedRoutine.cs" Link="Production/GuardedRoutine.cs" />
     <Compile Include="../../Multiplayer/Utils/LoadingManifest.cs" Link="Production/LoadingManifest.cs" />
     <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/Jobs/ClientboundJobManifestPacket.cs" Link="Production/ClientboundJobManifestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Clientbound/Train/ClientboundTrainManifestPacket.cs" Link="Production/ClientboundTrainManifestPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/Train/ServerboundTrainRecoveryPacket.cs" Link="Production/ServerboundTrainRecoveryPacket.cs" />
+    <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/Train/ServerboundTrainManifestRecoveryPacket.cs" Link="Production/ServerboundTrainManifestRecoveryPacket.cs" />
   </ItemGroup>
 </Project>
 

@@ -105,21 +105,26 @@ public class ModCompatibilityManager : SingletonBehaviour<ModCompatibilityManage
     public ModValidationResult ValidateClientMods(ModInfo[] clientMods)
     {
         var localMods = GetLocalMods();
-        var localModIds = localMods.Select(l => l.Id);
-
-        var clientModIds = clientMods.Select(c => c.Id);
-
-        List<ModInfo> missing = clientMods.Where(c => !localModIds.Contains(c.Id)).ToList();
-        List<ModInfo> extra = localMods.Where(l => !clientModIds.Contains(l.Id)).ToList();
-
-        bool valid = (missing.Count == 0) && (extra.Count == 0);
+        var validation = ModSetCompatibilityPolicy.Validate(
+            localMods.Select(mod => new CompatibleModDescriptor(mod.Id, mod.Version)),
+            clientMods?.Select(mod => new CompatibleModDescriptor(mod.Id, mod.Version)));
 
         return new()
         {
-            IsValid = valid,
-            Missing = missing,
-            Extra = extra
+            IsValid = validation.IsValid,
+            Missing = Resolve(localMods, validation.Missing),
+            Extra = Resolve(clientMods, validation.Extra),
+            VersionMismatches = Resolve(clientMods, validation.VersionMismatches),
+            InvalidEntries = Resolve(clientMods, validation.InvalidEntries)
         };
+    }
+
+    private static List<ModInfo> Resolve(IEnumerable<ModInfo> source, IEnumerable<CompatibleModDescriptor> descriptors)
+    {
+        var mods = source ?? [];
+        return descriptors.Select(descriptor => mods.FirstOrDefault(mod =>
+            string.Equals(mod.Id, descriptor.Id, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(mod.Version, descriptor.Version, StringComparison.OrdinalIgnoreCase))).ToList();
     }
 
     /// <summary>
@@ -200,4 +205,6 @@ public class ModValidationResult
     public bool IsValid { get; set; }
     public List<ModInfo> Missing { get; set; } = [];
     public List<ModInfo> Extra { get; set; } = [];
+    public List<ModInfo> VersionMismatches { get; set; } = [];
+    public List<ModInfo> InvalidEntries { get; set; } = [];
 }

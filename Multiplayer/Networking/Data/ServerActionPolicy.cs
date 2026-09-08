@@ -12,6 +12,15 @@ public static class ServerActionPolicy
         squaredDistance <= (double)range * range;
     public static bool Allowed(bool ready, bool host, bool enabled) => ready && (host || enabled);
     public static bool Index(float value, int count) => Finite(value) && value >= 0 && value < count && value == Math.Truncate(value);
+    public static bool JunctionBranch(int selectedBranch, int branchCount) =>
+        branchCount > 0 && selectedBranch >= 0 && selectedBranch < branchCount;
+    public static bool ParallelPayload(int keys, int values, int maximum = 256) =>
+        maximum > 0 && keys > 0 && keys <= maximum && keys == values;
+    public static bool TrackAlignment(float squaredDistance, float absoluteDirectionDot,
+        float maximumDistance = 4f, float minimumDirectionDot = 0.5f) =>
+        InRange(squaredDistance, maximumDistance) && Finite(absoluteDirectionDot) &&
+        Finite(minimumDirectionDot) && minimumDirectionDot >= 0 && minimumDirectionDot <= 1 &&
+        absoluteDirectionDot >= minimumDirectionDot && absoluteDirectionDot <= 1.0001f;
 
     public static bool CouplerFlags(ushort raw, out bool remote)
     {

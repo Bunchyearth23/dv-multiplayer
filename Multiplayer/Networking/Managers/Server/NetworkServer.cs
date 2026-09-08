@@ -198,6 +198,9 @@ public partial class NetworkServer : NetworkManager
         // World sync
         netPacketProcessor.SubscribeReusable<ServerboundLoadStateUpdatePacket, ITransportPeer>(OnServerboundLoadStateUpdatePacket);
         netPacketProcessor.SubscribeReusable<ServerboundWorldItemRecoveryPacket, ITransportPeer>(OnWorldItemRecovery);
+        netPacketProcessor.SubscribeReusable<ServerboundTrainRecoveryPacket, ITransportPeer>(OnTrainRecovery);
+        netPacketProcessor.SubscribeReusable<ServerboundTrainManifestRecoveryPacket, ITransportPeer>(OnTrainManifestRecovery);
+        netPacketProcessor.SubscribeReusable<ServerboundRailwayStateRecoveryPacket, ITransportPeer>(OnRailwayStateRecovery);
         netPacketProcessor.SubscribeReusable<ServerboundTimeAdvancePacket, ITransportPeer>(OnServerboundTimeAdvancePacket);
 
         netPacketProcessor.SubscribeReusable<CommonChangeJunctionPacket, ITransportPeer>(OnCommonChangeJunctionPacket);
@@ -1274,6 +1277,52 @@ public partial class NetworkServer : NetworkManager
         SendItemsChangePacket(updates.Where(item => item != null).ToList(), player);
     }
 
+    private void OnTrainRecovery(ServerboundTrainRecoveryPacket packet, ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(peer, out var player) || player.LoadingState != PlayerLoadingState.ReadyForTrainSets ||
+            player.InitialTrainCars == null || packet?.CarNetIds == null || packet.CarNetIds.Length == 0 ||
+            packet.CarNetIds.Length > LoadingRecovery.MaxBatch ||
+            packet.CarNetIds.Distinct().Count() != packet.CarNetIds.Length ||
+            packet.CarNetIds.Any(id => !player.InitialTrainCars.Contains(id))) return;
+        if (!player.TrainRecovery.TryTake(packet.CarNetIds, out var ids)) return;
+
+        var sent = new HashSet<Trainset>();
+        foreach (var id in ids)
+            if (NetworkedTrainCar.TryGet(id, out NetworkedTrainCar car) && car?.TrainCar?.trainset?.cars != null &&
+                sent.Add(car.TrainCar.trainset))
+                SendSpawnTrainset(car.TrainCar.trainset.cars, false, false, peer);
+    }
+
+    private void OnTrainManifestRecovery(ServerboundTrainManifestRecoveryPacket packet, ITransportPeer peer)
+    {
+        if (!TryGetServerPlayer(peer, out var player) || player.LoadingState != PlayerLoadingState.ReadyForTrainSets ||
+            player.InitialTrainCars == null || !player.TrainManifestRecovery.TryTake()) return;
+        SendPacket(peer, new ClientboundLoadStateInfoPacket
+        {
+            LoadingState = PlayerLoadingState.ReadyForTrainSets,
+            ItemsToLoad = player.InitialTrainsetCount
+        }, DeliveryMethod.ReliableOrdered);
+        SendPacket(peer, new ClientboundTrainManifestPacket
+        {
+            CarNetIds = player.InitialTrainCars.ToArray()
+        }, DeliveryMethod.ReliableOrdered);
+    }
+
+    private void OnRailwayStateRecovery(ServerboundRailwayStateRecoveryPacket packet, ITransportPeer peer)
+    {
+        if (TryGetServerPlayer(peer, out var player) && player.LoadingState == PlayerLoadingState.ReadyForWorldState)
+            SendRailwayState(peer);
+    }
+
+    private void SendRailwayState(ITransportPeer peer)
+    {
+        SendPacket(peer, new ClientboundRailwayStatePacket
+        {
+            SelectedJunctionBranches = NetworkedJunction.IndexedJunctions.Select(j => j.Junction.selectedBranch).ToArray(),
+            TurntableRotations = NetworkedTurntable.IndexedTurntables.Select(j => j.TurntableRailTrack.currentYRotation).ToArray()
+        }, DeliveryMethod.ReliableOrdered);
+    }
+
     private void OnServerboundLoadStateUpdatePacket(ServerboundLoadStateUpdatePacket packet, ITransportPeer peer)
     {
         LogDebug(() => $"OnServerboundLoadStateUpdatePacket from peerId: {peer.Id}, loadState: {packet.LoadState}");
@@ -1351,11 +1400,7 @@ public partial class NetworkServer : NetworkManager
                 SendWeatherState(peer);
 
                 // Send junctions and turntables
-                SendPacket(peer, new ClientboundRailwayStatePacket
-                {
-                    SelectedJunctionBranches = NetworkedJunction.IndexedJunctions.Select(j => j.Junction.selectedBranch).ToArray(),
-                    TurntableRotations = NetworkedTurntable.IndexedTurntables.Select(j => j.TurntableRailTrack.currentYRotation).ToArray()
-                }, DeliveryMethod.ReliableOrdered);
+                SendRailwayState(peer);
 
                 // Send generic switch states
                 foreach (var genericSwitch in NetworkedGenericSwitch.AllSwitches)
@@ -1370,29 +1415,39 @@ public partial class NetworkServer : NetworkManager
                 break;
 
             case PlayerLoadingState.ReadyForTrainSets:
-                // Inform client of total trainsets to be loaded
-                SendPacket(peer, new ClientboundLoadStateInfoPacket
-                {
-                    LoadingState = PlayerLoadingState.ReadyForTrainSets,
-                    ItemsToLoad = (uint)Trainset.allSets.Count()
-                }, DeliveryMethod.ReliableOrdered);
-
+                var initialTrainsets = Trainset.allSets.Where(set => set?.cars != null).ToArray();
                 // Send trains
-                foreach (Trainset set in Trainset.allSets)
+                var trainManifest = new List<ushort>();
+                uint sentTrainsets = 0;
+                foreach (Trainset set in initialTrainsets)
                 {
                     try
                     {
                         SendSpawnTrainset(set.cars, false, false, peer);
+                        trainManifest.AddRange(set.cars.Select(car => car.GetNetId()).Where(id => id != 0));
+                        sentTrainsets++;
                     }
                     catch (Exception e)
                     {
                         LogWarning($"Exception when trying to send train set spawn data for [{set?.firstCar?.ID}, {set?.firstCar?.GetNetId()}]\r\n{e.Message}\r\n{e.StackTrace}");
                     }
                 }
+                SendPacket(peer, new ClientboundLoadStateInfoPacket
+                {
+                    LoadingState = PlayerLoadingState.ReadyForTrainSets,
+                    ItemsToLoad = sentTrainsets
+                }, DeliveryMethod.ReliableOrdered);
+                player.InitialTrainCars = new HashSet<ushort>(trainManifest);
+                player.InitialTrainsetCount = sentTrainsets;
+                SendPacket(peer, new ClientboundTrainManifestPacket
+                {
+                    CarNetIds = player.InitialTrainCars.ToArray()
+                }, DeliveryMethod.ReliableOrdered);
 
                 break;
 
             case PlayerLoadingState.ReadyForItems:
+                player.InitialTrainCars = null;
                 NetworkedItemManager.Instance.RestorePlayerInventory(player,
                     items =>
                     {
@@ -1605,7 +1660,8 @@ public partial class NetworkServer : NetworkManager
     {
         if (!TryGetServerPlayer(peer, out var player) || !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
             !NetworkedJunction.Get(packet.NetId, out var junction) || junction?.Junction == null ||
-            !Enum.IsDefined(typeof(Junction.SwitchMode), (Junction.SwitchMode)packet.Mode) || packet.SelectedBranch > 1)
+            !Enum.IsDefined(typeof(Junction.SwitchMode), (Junction.SwitchMode)packet.Mode) ||
+            !ServerActionPolicy.JunctionBranch(packet.SelectedBranch, junction.Junction.outBranches?.Count ?? 0))
         {
             RejectAction(peer, "Junction", "not ready, permission denied or invalid target/state");
             return;
@@ -1714,8 +1770,13 @@ public partial class NetworkServer : NetworkManager
 
     private void OnCommonPaintThemePacket(CommonPaintThemePacket packet, ITransportPeer peer)
     {
-        if (!TryGetServerPlayer(peer, out ServerPlayer player))
+        if (!TryGetServerPlayer(peer, out ServerPlayer player) ||
+            !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            packet.TargetArea != TrainCarPaint.Target.Interior && packet.TargetArea != TrainCarPaint.Target.Exterior)
+        {
+            RejectAction(peer, "Train paint", "not ready, permission denied or invalid target");
             return;
+        }
 
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar netTrainCar))
             return;
@@ -1744,7 +1805,7 @@ public partial class NetworkServer : NetworkManager
             return;
 
         //is value valid?
-        if (float.IsNaN(packet.CoalMassDelta))
+        if (!ServerActionPolicy.Finite(packet.CoalMassDelta))
             return;
 
         if (!NetworkLifecycle.Instance.IsHost(player))
@@ -1764,7 +1825,7 @@ public partial class NetworkServer : NetworkManager
             return;
 
         // is value valid?
-        if (float.IsNaN(packet.CoalMassDelta))
+        if (!ServerActionPolicy.Finite(packet.CoalMassDelta))
             return;
 
         if (!NetworkLifecycle.Instance.IsHost(player))
@@ -1793,10 +1854,17 @@ public partial class NetworkServer : NetworkManager
 
     private void OnCommonTrainPortsPacket(CommonTrainPortsPacket packet, ITransportPeer peer)
     {
-        if (!TryGetServerPlayer(peer, out ServerPlayer player))
+        if (!TryGetServerPlayer(peer, out ServerPlayer player) || !AllowsAction(player, true))
             return;
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
+        if (packet.PortIds == null || packet.PortValues == null ||
+            !ServerActionPolicy.ParallelPayload(packet.PortIds.Length, packet.PortValues.Length) ||
+            packet.PortValues.Any(value => !ServerActionPolicy.Finite(value)))
+        {
+            RejectAction(peer, "Train control", "invalid port payload");
+            return;
+        }
 
         //if not the host && validation fails then ignore packet
         if (!NetworkLifecycle.Instance.IsHost(player))
@@ -1815,7 +1883,7 @@ public partial class NetworkServer : NetworkManager
 
     private void OnServerboundTrainControlAuthorityPacket(ServerboundTrainControlAuthorityPacket packet, ITransportPeer peer)
     {
-        if (!TryGetServerPlayer(peer, out ServerPlayer player))
+        if (!TryGetServerPlayer(peer, out ServerPlayer player) || !AllowsAction(player, true))
             return;
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
@@ -1825,6 +1893,17 @@ public partial class NetworkServer : NetworkManager
 
     private void OnCommonTrainFusesPacket(CommonTrainFusesPacket packet, ITransportPeer peer)
     {
+        if (!TryGetServerPlayer(peer, out ServerPlayer player) ||
+            !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
+            !NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
+            return;
+        if (packet.FuseIds == null || packet.FuseValues == null ||
+            !ServerActionPolicy.ParallelPayload(packet.FuseIds.Length, packet.FuseValues.Length) ||
+            !NetworkLifecycle.Instance.IsHost(player) && !networkedTrainCar.Server_ValidateClientFusesPacket(player, packet))
+        {
+            RejectAction(peer, "Train fuse", "invalid payload, target or distance");
+            return;
+        }
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
@@ -1916,12 +1995,21 @@ public partial class NetworkServer : NetworkManager
 
         TrainCar trainCar = networkedTrainCar.TrainCar;
         Vector3 position = packet.Position + WorldMover.currentMove;
+        var rerailPoints = networkedRailTrack.RailTrack.GetKinkedPointSet()?.points;
+        bool hasRerailPoints = rerailPoints != null && rerailPoints.Length > 0;
+        var closestRerailPoint = hasRerailPoints
+            ? rerailPoints.OrderBy(point => ((Vector3)point.position - packet.Position).sqrMagnitude).First()
+            : default;
+        bool positionMatchesTrack = hasRerailPoints && ServerActionPolicy.TrackAlignment(
+            ((Vector3)closestRerailPoint.position - packet.Position).sqrMagnitude,
+            Mathf.Abs(Vector3.Dot(packet.Forward.normalized, ((Vector3)closestRerailPoint.forward).normalized)));
         if (!ServerActionPolicy.InRange((player.WorldPosition - position).sqrMagnitude, CommsRadioCarSpawner.SIGNAL_RANGE) ||
             !ServerActionPolicy.InRange((player.WorldPosition - trainCar.transform.position).sqrMagnitude, CommsRadioCarSpawner.SIGNAL_RANGE) ||
             !ServerActionPolicy.Finite(packet.Forward.sqrMagnitude) || packet.Forward.sqrMagnitude < 0.5f || packet.Forward.sqrMagnitude > 1.5f ||
+            !positionMatchesTrack ||
             networkedTrainCar.HasPlayers())
         {
-            RejectAction(peer, "Rerail", "invalid direction, occupied train or out of radio range");
+            RejectAction(peer, "Rerail", "position/track mismatch, invalid direction, occupied train or out of radio range");
             return;
         }
 
@@ -2216,16 +2304,22 @@ public partial class NetworkServer : NetworkManager
                     NetworkedCashRegisterWithModules.Get(packet.RegisterNetId, out var register);
                     return backend = new ShopPurchaseBackend(register, player, packet.ItemIds, packet.Quantities);
                 });
-        if (outcome.Quote.Status == ShopQuoteStatus.Success && backend != null)
-            backend.NotifyCommitted();
-        if (outcome.RecoveryRequired)
-            LogError($"Shop purchase {packet.OperationId} requires recovery after failed compensation.");
-        SendRpcResponse(packet.TicketId, new ShopPurchaseResponse
-        {
-            RegisterNetId = packet.RegisterNetId, OperationId = packet.OperationId,
-            Status = outcome.Quote.Status, Total = outcome.Quote.Total,
-            FailedLine = outcome.Quote.FailedLine, RecoveryRequired = outcome.RecoveryRequired
-        }, peer);
+        RpcTerminalResponse.Send(
+            outcome.Quote.Status == ShopQuoteStatus.Success && backend != null
+                ? backend.NotifyCommitted
+                : null,
+            ex => LogError($"Shop purchase {packet.OperationId} committed, but its notification failed: {ex}"),
+            () =>
+            {
+                if (outcome.RecoveryRequired)
+                    LogError($"Shop purchase {packet.OperationId} requires recovery after failed compensation.");
+                SendRpcResponse(packet.TicketId, new ShopPurchaseResponse
+                {
+                    RegisterNetId = packet.RegisterNetId, OperationId = packet.OperationId,
+                    Status = outcome.Quote.Status, Total = outcome.Quote.Total,
+                    FailedLine = outcome.Quote.FailedLine, RecoveryRequired = outcome.RecoveryRequired
+                }, peer);
+            });
     }
 
     private void OnServerboundLicensePurchaseRequestPacket(ServerboundLicensePurchaseRequestPacket packet, ITransportPeer peer)

@@ -76,6 +76,7 @@ public partial class NetworkClient : NetworkManager
     internal uint trainSetsToSpawn = uint.MaxValue;
     internal uint trainSetsSpawned = 0;
     internal bool railwayStateLoaded = false;
+    private LoadingManifest initialTrainCars;
 
     // One way ping in milliseconds
     public int Ping { get; private set; }
@@ -215,6 +216,12 @@ public partial class NetworkClient : NetworkManager
 
         // Train Sync
         netPacketProcessor.SubscribeReusable<ClientboundSpawnTrainSetPacket>(OnClientboundSpawnTrainSetPacket);
+        netPacketProcessor.SubscribeReusable<ClientboundTrainManifestPacket>(packet =>
+        {
+            if (stopped || LoadingState != PlayerLoadingState.ReadyForTrainSets || initialTrainCars == null) return;
+            try { initialTrainCars.SetExpected(packet.CarNetIds); }
+            catch (Exception ex) { FailWorldSync(ex); }
+        });
         netPacketProcessor.SubscribeReusable<ClientboundTrainRepairPacket>(p =>
         {
             if (NetworkLifecycle.Instance.IsHost()) return;
@@ -378,9 +385,12 @@ public partial class NetworkClient : NetworkManager
         displayLoadingInfo?.OnLoadingStatusChanged(Locale.LOADING_INFO__SYNC_WORLD_STATE, false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
 
         deadline = new LoadingDeadline("railway state", 60, 180);
+        var railwayRecovery = new LoadingRetry();
         while (!railwayStateLoaded)
         {
             deadline.Check("waiting for tracks and turntables");
+            if (railwayRecovery.TryTake())
+                SendPacket(serverPeer, new ServerboundRailwayStateRecoveryPacket(), DeliveryMethod.ReliableOrdered);
             yield return null;
         }
 
@@ -390,6 +400,9 @@ public partial class NetworkClient : NetworkManager
          */
 
         Log("Requesting cars");
+        initialTrainCars = new LoadingManifest();
+        var trainRecovery = new LoadingRecovery();
+        var trainManifestRecovery = new LoadingRetry();
         SendLoadStateUpdate(PlayerLoadingState.ReadyForTrainSets);
         displayLoadingInfo?.OnLoadingStatusChanged("Syncing rolling stock", false, ((float)LoadingState / (float)PlayerLoadingState.Complete) * 100);
 
@@ -400,14 +413,22 @@ public partial class NetworkClient : NetworkManager
         while (trainSetsToSpawn == uint.MaxValue)
         {
             deadline.Check("waiting for server trainset count");
+            if (trainManifestRecovery.TryTake())
+                SendPacket(serverPeer, new ServerboundTrainManifestRecoveryPacket(), DeliveryMethod.ReliableOrdered);
             yield return null;
         }
 
         // Wait for all Trainsets to be spawned
         deadline = new LoadingDeadline("trainset spawning", 120, 900);
-        while (trainSetsSpawned < trainSetsToSpawn)
+        while (trainSetsSpawned < trainSetsToSpawn || !initialTrainCars.IsComplete)
         {
-            deadline.Check($"{trainSetsSpawned}/{trainSetsToSpawn} trainsets spawned");
+            deadline.Check(!initialTrainCars.HasManifest
+                ? $"{trainSetsSpawned}/{trainSetsToSpawn} trainsets spawned; waiting for car manifest"
+                : $"{trainSetsSpawned}/{trainSetsToSpawn} trainsets spawned; missing car IDs: {string.Join(", ", initialTrainCars.Missing)}");
+            if (!initialTrainCars.HasManifest && trainManifestRecovery.TryTake())
+                SendPacket(serverPeer, new ServerboundTrainManifestRecoveryPacket(), DeliveryMethod.ReliableOrdered);
+            if (initialTrainCars.HasManifest && trainRecovery.TryTake(initialTrainCars.Missing, out var missingCars))
+                SendPacket(serverPeer, new ServerboundTrainRecoveryPacket { CarNetIds = missingCars }, DeliveryMethod.ReliableOrdered);
             if (lastLoggedSets != trainSetsSpawned)
             {
                 Log($"Waiting for train sets to spawn... {trainSetsSpawned}/{trainSetsToSpawn}");
@@ -858,18 +879,36 @@ public partial class NetworkClient : NetworkManager
     {
         Log("Received railway state");
 
-        for (int i = 0; i < packet.SelectedJunctionBranches.Length; i++)
+        if (stopped || LoadingState != PlayerLoadingState.ReadyForWorldState || packet?.SelectedJunctionBranches == null ||
+            packet.TurntableRotations == null ||
+            packet.SelectedJunctionBranches.Length != NetworkedJunction.IndexedJunctions.Length ||
+            packet.TurntableRotations.Length != NetworkedTurntable.IndexedTurntables.Length)
         {
-            if (!NetworkedJunction.Get((ushort)(i + 1), out NetworkedJunction junction))
-                return;
-            junction.Switch((byte)Junction.SwitchMode.NO_SOUND, packet.SelectedJunctionBranches[i], true);
+            FailWorldSync(new FormatException("Invalid railway state payload."));
+            return;
         }
 
-        for (int i = 0; i < packet.TurntableRotations.Length; i++)
-        {
-            if (!NetworkedTurntable.Get((byte)(i + 1), out NetworkedTurntable turntable))
+        var junctions = new NetworkedJunction[packet.SelectedJunctionBranches.Length];
+        var turntables = new NetworkedTurntable[packet.TurntableRotations.Length];
+        for (int i = 0; i < junctions.Length; i++)
+            if (!NetworkedJunction.Get((ushort)(i + 1), out junctions[i]) || junctions[i] == null)
+                return; // World indexing is not ready yet; a bounded retry will request the snapshot again.
+        for (int i = 0; i < turntables.Length; i++)
+            if (!NetworkedTurntable.Get((byte)(i + 1), out turntables[i]) || turntables[i] == null)
                 return;
-            turntable.SetRotation(packet.TurntableRotations[i], true, true);
+
+        try
+        {
+            for (int i = 0; i < packet.SelectedJunctionBranches.Length; i++)
+                junctions[i].Switch((byte)Junction.SwitchMode.NO_SOUND, packet.SelectedJunctionBranches[i], true);
+
+            for (int i = 0; i < packet.TurntableRotations.Length; i++)
+                turntables[i].SetRotation(packet.TurntableRotations[i], true, true);
+        }
+        catch (Exception ex)
+        {
+            FailWorldSync(new InvalidOperationException("Failed to apply railway state.", ex));
+            return;
         }
 
         railwayStateLoaded = true;
@@ -891,20 +930,46 @@ public partial class NetworkClient : NetworkManager
 
     private void OnClientboundSpawnTrainSetPacket(ClientboundSpawnTrainSetPacket packet)
     {
+        if (packet?.SpawnParts == null || packet.SpawnParts.Length == 0 ||
+            packet.SpawnParts.Any(part => part.NetId == 0) ||
+            packet.SpawnParts.Select(part => part.NetId).Distinct().Count() != packet.SpawnParts.Length)
+        {
+            FailWorldSync(new FormatException("Invalid trainset spawn payload."));
+            return;
+        }
         LogDebug(() => $"Spawning trainset consisting of {string.Join(", ", packet.SpawnParts.Select(p => $"{p.CarId} ({p.LiveryId}) with netId: {p.NetId}"))}");
 
+        int existingCount = 0;
         foreach (var part in packet.SpawnParts)
         {
-            if (NetworkedTrainCar.GetTrainCarFromTrainId(part.CarId, out TrainCar car))
+            if (!NetworkedTrainCar.TryGet(part.NetId, out NetworkedTrainCar existing) || existing == null)
             {
-                LogError($"ClientboundSpawnTrainSetPacket() Tried to spawn trainset with carId: {part.CarId}, but car already exists!");
+                continue;
+            }
+            existingCount++;
+            if (existing.CurrentID != part.CarId)
+            {
+                FailWorldSync(new InvalidOperationException($"Train network ID {part.NetId} conflicts with {existing.CurrentID}."));
                 return;
             }
         }
 
-        NetworkedCarSpawner.SpawnCars(packet.SpawnParts, packet.AutoCouple);
+        bool alreadyApplied = existingCount == packet.SpawnParts.Length;
+        if (!alreadyApplied)
+        {
+            try
+            {
+                if (existingCount == 0) NetworkedCarSpawner.SpawnCars(packet.SpawnParts, packet.AutoCouple);
+                else NetworkedCarSpawner.RepairCars(packet.SpawnParts);
+            }
+            catch (Exception ex) { FailWorldSync(ex); return; }
+        }
 
-        if (LoadingState == PlayerLoadingState.ReadyForTrainSets)
+        if (LoadingState == PlayerLoadingState.ReadyForTrainSets && initialTrainCars != null)
+            foreach (var part in packet.SpawnParts)
+                initialTrainCars.MarkApplied(part.NetId);
+
+        if (!alreadyApplied && LoadingState == PlayerLoadingState.ReadyForTrainSets)
             trainSetsSpawned++;
     }
 

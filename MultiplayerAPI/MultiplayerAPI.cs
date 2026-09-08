@@ -2,6 +2,7 @@ using MPAPI.Interfaces;
 using System;
 using System.Linq;
 using System.Reflection;
+using MPAPI.Util;
 
 namespace MPAPI;
 
@@ -115,7 +116,7 @@ public static class MultiplayerAPI
     internal static void RegisterClient(IClient client)
     {
         _client = client;
-        ClientStarted?.Invoke(client);
+        EventDispatch.Isolated(ClientStarted, client);
     }
 
     /// <summary>
@@ -124,7 +125,7 @@ public static class MultiplayerAPI
     internal static void ClearClient()
     {
         _client = null;
-        ClientStopped?.Invoke();
+        EventDispatch.Isolated(ClientStopped);
     }
 
     /// <summary>
@@ -134,7 +135,7 @@ public static class MultiplayerAPI
     internal static void RegisterServer(IServer server)
     {
         _server = server;
-        ServerStarted?.Invoke(server);
+        EventDispatch.Isolated(ServerStarted, server);
     }
 
     /// <summary>
@@ -143,6 +144,6 @@ public static class MultiplayerAPI
     internal static void ClearServer()
     {
         _server = null;
-        ServerStopped?.Invoke();
+        EventDispatch.Isolated(ServerStopped);
     }
 }

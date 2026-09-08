@@ -7,6 +7,7 @@ using Multiplayer.Components.Networking.Train;
 using Multiplayer.Networking.Data.Jobs;
 using System;
 using System.Collections.Generic;
+using MPAPI.Util;
 
 namespace Multiplayer.API;
 
@@ -135,7 +136,7 @@ public class APIProvider : IMultiplayerAPI
 
     internal void OnTickInternal(uint tick)
     {
-        OnTick?.Invoke(tick);
+        EventDispatch.Isolated(OnTick, tick, exception => Multiplayer.LogException("MultiplayerAPI OnTick adapter failed", exception));
     }
 
     #endregion

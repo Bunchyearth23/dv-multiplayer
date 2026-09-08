@@ -10,7 +10,9 @@ internal static class TrainCampaignTests
             LeftHandPosition = new UnityEngine.Vector3(-1, 2, 3),
             RightHandPosition = new UnityEngine.Vector3(4, 5, 6),
             LeftHandRotation = new UnityEngine.Quaternion(0, 0, 0, 1),
-            RightHandRotation = new UnityEngine.Quaternion(0, 1, 0, 0)
+            RightHandRotation = new UnityEngine.Quaternion(0, 1, 0, 0),
+            LeftHandOpen = false,
+            RightHandOpen = true
         };
         var writer = new LiteNetLib.Utils.NetDataWriter();
         Multiplayer.Networking.Data.Player.PlayerTrackingData.Serialize(writer, pose);
@@ -18,10 +20,18 @@ internal static class TrainCampaignTests
             new LiteNetLib.Utils.NetDataReader(writer.CopyData()));
         Check(restored.LeftHandPosition.Value.x == -1 && restored.RightHandPosition.Value.x == 4);
         Check(restored.LeftHandRotation.Value.w == 1 && restored.RightHandRotation.Value.y == 1);
+        Check(restored.LeftHandOpen == false && restored.RightHandOpen == true);
         var merged = restored.MergeFrom(new Multiplayer.Networking.Data.Player.PlayerTrackingData
             { LeftHandPosition = new UnityEngine.Vector3(-2, 2, 3) });
         Check(merged.LeftHandPosition.Value.x == -2 && merged.RightHandPosition.Value.x == 4);
         Check(merged.RightHandRotation.Value.y == 1 && merged.HasAdditionalData);
+        Check(merged.LeftHandOpen == false && merged.RightHandOpen == true);
+
+        var emptyWriter = new LiteNetLib.Utils.NetDataWriter();
+        Multiplayer.Networking.Data.Player.PlayerTrackingData.Serialize(emptyWriter, new Multiplayer.Networking.Data.Player.PlayerTrackingData());
+        var emptyDelta = Multiplayer.Networking.Data.Player.PlayerTrackingData.Deserialize(
+            new LiteNetLib.Utils.NetDataReader(emptyWriter.CopyData()));
+        Check(emptyDelta.LeftHandOpen == null && emptyDelta.RightHandOpen == null);
     }
     private static void Check(bool value) { if (!value) throw new Exception("Train campaign invariant failed"); }
     public static void BurstPreservesBusinessOrder()
@@ -79,7 +89,20 @@ internal static class TrainCampaignTests
         metrics.RecordPosition(2, 2); metrics.RecordPosition(3, 2); metrics.RecordPosition(double.NaN, 2);
         Check(metrics.Frames == 2 && Math.Abs(metrics.FrameSeconds - .04) < .00001);
         Check(metrics.MaxFrameSeconds == .03 && metrics.PositionChecks == 2 && metrics.CorrectionRequests == 1);
-        Check(metrics.Format(1024).Contains("mean_frame_ms=20.000") && metrics.Format(1024).Contains("managed_bytes=1024"));
+        Check(metrics.FramePercentile(.5) == 10 && metrics.FramePercentile(.95) == 30);
+        Check(metrics.Format(1024, 2048).Contains("p95_frame_ms=30") && metrics.Format(1024, 2048).Contains("native_bytes=2048"));
+    }
+    public static void TrafficMetricsAreBoundedAndCorrelated()
+    {
+        var metrics = new NetworkTrafficMetrics();
+        metrics.Record("out", 7, "TrainPhysics", 120);
+        metrics.Record("out", 7, "TrainPhysics", 80);
+        metrics.Record("in", 8, "ReliableOrdered_ch0", 40);
+        string report = metrics.Format();
+        Check(report.Contains("out:7:TrainPhysics_packets=2") && report.Contains("out:7:TrainPhysics_bytes=200"));
+        Check(report.Contains("in:8:ReliableOrdered_ch0_bytes=40"));
+        for (int i = 0; i < 600; i++) metrics.Record("out", i, "P" + i, 1);
+        Check(metrics.DroppedSeries > 0);
     }
     public static void DrainBudgetAndFailureKeepPendingOrder()
     {
