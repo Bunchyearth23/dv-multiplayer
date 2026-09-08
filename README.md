@@ -28,6 +28,12 @@ This public fork is maintained at [Bunchyearth23/dv-multiplayer](https://github.
 
 `BDVM.MultiplayerBridge` does not bundle this mod. Users who need BDVM multiplayer features must install a compatible build of this fork; solo BDVM does not require it.
 
+The fork manifest uses the `bdvm-integration` update feed and never follows the
+upstream release feed automatically. Upstream builds remain the provenance base,
+but they do not contain the BDVM protocol and recovery contract required by the
+bridge. Published integration builds remain prerelease betas until their Unity
+and multi-machine campaign is complete.
+
 
 
 
