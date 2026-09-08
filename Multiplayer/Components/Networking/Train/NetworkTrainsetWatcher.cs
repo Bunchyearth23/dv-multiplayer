@@ -14,6 +14,9 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
 {
     public NetworkCampaignMetrics Metrics { get; } = new();
     private float nextMetricsReport;
+    private float nextIncompleteTrainsetReport;
+    private int incompleteTrainsetsSinceReport;
+    private const float INCOMPLETE_TRAINSET_REPORT_INTERVAL = 60f;
     private void Update()
     {
         Metrics.RecordFrame(Time.unscaledDeltaTime);
@@ -64,8 +67,10 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
             if (set != null && set.cars != null)
                 Server_TickSet(set, tick);
             else
-                Multiplayer.LogWarning($"Server_OnTick(): Trainset or cars are null. Set Id: {set?.id}, Cars: {set?.cars?.Count}");
+                RecordIncompleteTrainset();
         }
+
+        ReportIncompleteTrainsetsIfDue();
     }
 
     private void Server_TickSet(Trainset set, uint tick)
@@ -86,7 +91,7 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
 
         if (set.firstCar == null || set.lastCar == null)
         {
-            Multiplayer.LogWarning($"Trainset {set?.id} has null end cars! firstCar: {set?.firstCar != null}, lastCar: {set?.lastCar != null}");
+            RecordIncompleteTrainset();
             return;
         }
         cachedSendPacket.FirstNetId = set.firstCar.GetNetId();
@@ -209,6 +214,22 @@ public class NetworkTrainsetWatcher : SingletonBehaviour<NetworkTrainsetWatcher>
 
         cachedSendPacket.TrainsetParts = trainsetParts;
         NetworkLifecycle.Instance.Server.SendTrainsetPhysicsUpdate(cachedSendPacket, anyTracksDirty);
+    }
+
+    private void RecordIncompleteTrainset()
+    {
+        if (incompleteTrainsetsSinceReport < int.MaxValue)
+            incompleteTrainsetsSinceReport++;
+    }
+
+    private void ReportIncompleteTrainsetsIfDue()
+    {
+        if (incompleteTrainsetsSinceReport == 0 || Time.realtimeSinceStartup < nextIncompleteTrainsetReport)
+            return;
+
+        Multiplayer.LogWarning($"Skipped {incompleteTrainsetsSinceReport} incomplete trainset observations during the last reporting window; null trainsets/end cars are ignored until initialized.");
+        incompleteTrainsetsSinceReport = 0;
+        nextIncompleteTrainsetReport = Time.realtimeSinceStartup + INCOMPLETE_TRAINSET_REPORT_INTERVAL;
     }
     #endregion
 
