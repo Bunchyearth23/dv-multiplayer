@@ -427,7 +427,16 @@ public partial class NetworkServer : NetworkManager
     public override void OnConnectionRequest(NetDataReader requestData, IConnectionRequest request)
     {
         LogDebug(() => $"NetworkServer OnConnectionRequest");
-        netPacketProcessor.ReadAllPackets(requestData, request);
+        try
+        {
+            netPacketProcessor.ReadAllPackets(requestData, request);
+        }
+        catch (Exception e)
+        {
+            LogWarning($"Rejected malformed connection request{(Multiplayer.Settings.LogIps ? $" from {request?.RemoteEndPoint?.Address}" : "")}: {e.GetType().Name}: {e.Message}");
+            try { request?.Reject(); }
+            catch (Exception rejectError) { LogWarning($"Failed to reject malformed connection request: {rejectError.Message}"); }
+        }
     }
 
     #endregion
@@ -1104,7 +1113,18 @@ public partial class NetworkServer : NetworkManager
 
     private void OnServerboundClientLoginPacket(ServerboundClientLoginPacket packet, IConnectionRequest request)
     {
-        Log($"Received login request from {packet.Username}{(Multiplayer.Settings.LogIps ? $" at {request.RemoteEndPoint.Address}" : "")}");
+        string remote = Multiplayer.Settings.LogIps ? $" at {request?.RemoteEndPoint?.Address}" : "";
+        if (packet == null || packet.Mods == null ||
+            !LoginRequestPolicy.IsValidEnvelope(packet.Username, packet.Guid, packet.Password,
+                packet.BuildVersion, packet.CharacterId, packet.Mods?.Length ?? -1) ||
+            packet.Mods.Any(mod => !LoginRequestPolicy.IsValidMod(mod.Id, mod.Version)))
+        {
+            LogWarning($"Denied malformed login request{remote}");
+            request?.Reject();
+            return;
+        }
+
+        Log($"Received login request from {packet.Username}{remote}");
 
         LogDebug(() => $"OnServerboundClientLoginPacket from {packet.Username}");
 
@@ -1128,12 +1148,12 @@ public partial class NetworkServer : NetworkManager
         catch (ArgumentException)
         {
             // This can only happen if the sent GUID is tampered with, in which case, we aren't worried about showing a message.
-            Log($"Invalid GUID from {packet.Username}{(Multiplayer.Settings.LogIps ? $" at {request.RemoteEndPoint.Address}" : "")}");
+            Log($"Invalid GUID from {packet.Username}{remote}");
             request.Reject();
             return;
         }
 
-        Log($"Processing login packet for {packet.Username} ({guid}){(Multiplayer.Settings.LogIps ? $" at {request.RemoteEndPoint.Address}" : "")}");
+        Log($"Processing login packet for {packet.Username} ({guid}){remote}");
 
         if (Multiplayer.Settings.Password != packet.Password)
         {

@@ -1,0 +1,17 @@
+Derail Valley Multiplayer
+Copyright 2023-2026 Derail Valley Multiplayer contributors
+
+This product includes software developed by the Derail Valley Multiplayer
+project at https://github.com/AMacro/dv-multiplayer, which continues the
+original work by Pierce Thompson (Insprill) at
+https://github.com/Insprill/dv-multiplayer.
+
+The BDVM integration fork at https://github.com/Bunchyearth23/dv-multiplayer
+contains modifications made in 2026 for server-authoritative multiplayer,
+persistent player and item identity, reconnect and late-join recovery,
+protocol validation, synchronization reliability, diagnostics, and BDVM mod
+adapter integration.
+
+Copyright 2026 Bunchy (Bunchyearth23)
+
+The software is licensed under the Apache License, Version 2.0. See LICENSE.

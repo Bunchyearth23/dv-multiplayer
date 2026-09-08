@@ -24,6 +24,7 @@ $json | ConvertTo-Json -depth 32| set-content ($PSScriptRoot + '/info.json')
 Copy-Item ($PSScriptRoot + '/info.json') -Destination ("$PSScriptRoot/build/")
 Copy-Item ($Target) -Destination ("$PSScriptRoot/build/")
 Copy-Item ($PSScriptRoot + '/LICENSE') -Destination ("$PSScriptRoot/build/")
+Copy-Item ($PSScriptRoot + '/NOTICE') -Destination ("$PSScriptRoot/build/")
 
 #Copy files to Game Dir
 if (!(Test-Path ($GameDir))) {

@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 $workspacePath = Split-Path $PSScriptRoot -Parent
 Push-Location $workspacePath
 try {
+    & (Join-Path $PSScriptRoot 'Test-DistributionCompliance.ps1')
+
     if (-not (Test-Path -LiteralPath 'Directory.Build.targets')) {
         throw 'Configure Directory.Build.targets from the example with your Derail Valley installation path first.'
     }

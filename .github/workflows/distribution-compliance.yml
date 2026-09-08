@@ -1,0 +1,17 @@
+name: Distribution compliance
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  apache-notice:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify license, notice and packaging
+        shell: pwsh
+        run: ./tools/Test-DistributionCompliance.ps1

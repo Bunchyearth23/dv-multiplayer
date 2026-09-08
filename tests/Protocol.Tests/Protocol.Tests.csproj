@@ -19,6 +19,7 @@
     <Compile Include="../../Multiplayer/Utils/TickSnapshotBuffer.cs" Link="Production/TickSnapshotBuffer.cs" />
     <Compile Include="../../Multiplayer/Utils/NetworkCampaignMetrics.cs" Link="Production/NetworkCampaignMetrics.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/ProtocolCompatibility.cs" Link="Production/ProtocolCompatibility.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/LoginRequestPolicy.cs" Link="Production/LoginRequestPolicy.cs" />
     <Compile Include="../../Multiplayer/Utils/BoundedBatchQueue.cs" Link="Production/BoundedBatchQueue.cs" />
     <Compile Include="../../Multiplayer/Utils/ScopedRoutine.cs" Link="Production/ScopedRoutine.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/StartingInventoryGrants.cs" Link="Production/StartingInventoryGrants.cs" />

@@ -12,7 +12,9 @@ internal static class Program
 {
     private static int Main()
     {
-        var tests = new Action[] { TrainRecoveryTests.CompositionDetectsReplacementAndOrder,
+        var tests = new Action[] { LoginRequestPolicyTests.ValidEnvelopeAndModsAreAccepted,
+            LoginRequestPolicyTests.NullAndOversizedLoginFieldsAreRejected,
+            TrainRecoveryTests.CompositionDetectsReplacementAndOrder,
             TrainRecoveryTests.InvalidManifestsAreRejected, TrainRecoveryTests.TravelRetriesCannotChargeTwice,
             TrainRecoveryTests.TravelRecoveryBlocksNewOperations, TrainRecoveryTests.TravelPacketsRoundTrip,
             ServerActionPolicyTests.RejectsNonFiniteAndOverflowDistances,
