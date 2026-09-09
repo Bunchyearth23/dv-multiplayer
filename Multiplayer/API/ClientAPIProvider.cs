@@ -10,7 +10,7 @@ using static UnityModManagerNet.UnityModManager;
 
 namespace Multiplayer.API
 {
-    public class ClientAPIProvider : IClient
+    public class ClientAPIProvider : IClient, IPersistentLocalPlayerIdentity
     {
         private readonly NetworkClient client;
 
@@ -29,6 +29,7 @@ namespace Multiplayer.API
 
         #region Client Properties
         public byte PlayerId => client.PlayerId;
+        public Guid PersistentId => Multiplayer.Settings.GetGuid();
         public IReadOnlyCollection<IPlayer> Players => client.ClientPlayerWrappers;
         public int PlayerCount => client.ClientPlayerManager.Players.Count + 1; // add 1 for local player
 

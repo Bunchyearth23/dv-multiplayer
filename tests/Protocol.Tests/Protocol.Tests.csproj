@@ -24,6 +24,9 @@
     <Compile Include="../../MultiplayerAPI/Util/EventDispatch.cs" Link="Production/EventDispatch.cs" />
     <Compile Include="../../MultiplayerAPI/Util/ApiVersionPolicy.cs" Link="Production/ApiVersionPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/ProtocolCompatibility.cs" Link="Production/ProtocolCompatibility.cs" />
+    <Compile Include="../../MultiplayerAPI/Types/IndividualWalletResult.cs" Link="Production/IndividualWalletResult.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Wallets/IndividualWalletLedger.cs" Link="Production/IndividualWalletLedger.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Wallets/IndividualWalletStoreCodec.cs" Link="Production/IndividualWalletStoreCodec.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/LoginRequestPolicy.cs" Link="Production/LoginRequestPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/ModSetCompatibilityPolicy.cs" Link="Production/ModSetCompatibilityPolicy.cs" />
     <Compile Include="../../Multiplayer/Utils/BoundedBatchQueue.cs" Link="Production/BoundedBatchQueue.cs" />

@@ -12,7 +12,12 @@ internal static class Program
 {
     private static int Main()
     {
-        var tests = new Action[] { LoginRequestPolicyTests.ValidEnvelopeAndModsAreAccepted,
+        var tests = new Action[] { IndividualWalletTests.PlayersAreIsolatedAndTransfersAreAtomic,
+            IndividualWalletTests.RetriesAreExactlyOnceAndImmutable,
+            IndividualWalletTests.InvalidAndOverflowValuesAreRejected,
+            IndividualWalletTests.SaveReloadPreservesBalancesAndReplayProtection,
+            IndividualWalletTests.ConcurrentRetryMutatesOnceAndCallbacksAreIsolated,
+            LoginRequestPolicyTests.ValidEnvelopeAndModsAreAccepted,
             LoginRequestPolicyTests.NullAndOversizedLoginFieldsAreRejected,
             ModCompatibilityTests.ExactSetsAndVersionsAreRequired,
             ModCompatibilityTests.InvalidAdvertisementsAreRejected,

@@ -93,7 +93,7 @@
             <VersionNumber Include="$(InformationalVersion.Split('+')[0] )" />
         </ItemGroup>
     </Target>
-    <Target Name="PostBuild" AfterTargets="PostBuildEvent" DependsOnTargets="PostBuildMacros">   
+    <Target Name="PostBuild" AfterTargets="PostBuildEvent" DependsOnTargets="PostBuildMacros" Condition="'$(SkipMultiplayerPostBuild)' != 'true'">
         <Copy SourceFiles="$(TargetPath);" DestinationFolder="$(DvInstallDir)\Mods\MultiplayerAPITest" />
         <Copy SourceFiles="../build/MultiplayerAPI.dll" DestinationFolder="$(DvInstallDir)\Mods\MultiplayerAPITest" />
     </Target>

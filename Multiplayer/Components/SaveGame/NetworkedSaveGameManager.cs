@@ -13,6 +13,8 @@ using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Linq;
+using Multiplayer.API;
+using Multiplayer.Networking.Data.Wallets;
 
 namespace Multiplayer.Components.SaveGame;
 
@@ -101,6 +103,8 @@ public class NetworkedSaveGameManager : SingletonBehaviour<NetworkedSaveGameMana
             players.SetJObject(inventory.Key.ToString(), profile);
         }
         root.SetJObject(PLAYERS_KEY, players);
+        if (ServerAPIProvider.Current != null)
+            root.SetJObject(IndividualWalletStoreCodec.Key, ServerAPIProvider.Current.SaveIndividualWallets());
         data.SetJObject(ROOT_KEY, root);
     }
 

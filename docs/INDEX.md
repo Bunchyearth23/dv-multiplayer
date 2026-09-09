@@ -2,7 +2,7 @@
 
 Audit du 6 septembre 2026, sur les sources locales. Cet index constitue le point d'entrée pour savoir ce qu'il reste à faire. Il n'existait pas avant cet audit.
 
-Audit initial statique, suivi de lots d'implémentation le 6 septembre 2026. La compilation du mod contre le jeu local réussit et 133 tests automatisés passent ; aucun test en jeu n'a été exécuté. `Directory.Build.targets` a été configuré localement et les deux assemblies de scripts Unity compilées depuis les sources. L'assetbundle de distribution reste absent. Les constats initiaux ci-dessous restent ouverts jusqu'à validation des parcours complets. La distribution conserve le texte Apache-2.0 upstream intact, embarque un NOTICE attribuant les projets AMacro/Insprill et les modifications BDVM 2026, et vérifie ces éléments localement et en CI.
+Audit initial statique, suivi de lots d'implémentation le 6 septembre 2026. La compilation du mod contre le jeu local réussit et 138 tests automatisés passent ; aucun test en jeu n'a été exécuté. `Directory.Build.targets` a été configuré localement et les deux assemblies de scripts Unity compilées depuis les sources. L'assetbundle de distribution reste absent. Les constats initiaux ci-dessous restent ouverts jusqu'à validation des parcours complets. La distribution conserve le texte Apache-2.0 upstream intact, embarque un NOTICE attribuant les projets AMacro/Insprill et les modifications BDVM 2026, et vérifie ces éléments localement et en CI.
 
 ## Convention
 
@@ -10,7 +10,7 @@ Audit initial statique, suivi de lots d'implémentation le 6 septembre 2026. La 
 - Les constats et questions non résolus sont `open`. Les idées proposées restent `open` tant qu'elles ne sont pas arbitrées.
 - Les travaux W utilisent `planned`, `building`, `landed`, `blocked`, `dropped`. Leur état ne change que sur instruction explicite de l'utilisateur. Les W ci-dessous ont été créés après sa demande de lancer les chantiers.
 - Priorités proposées : P0 = intégrité de session ; P1 = fiabilité et cohérence ; P2 = complétude et confort.
-- Prochains identifiants disponibles : I-004, Q-002, D-001, W-019, X-013.
+- Prochains identifiants disponibles : I-004, Q-002, D-001, W-020, X-013.
 - Recherche des points ouverts : `rg ' open | planned | blocked ' docs/INDEX.md`.
 
 ## Chantiers lancés
@@ -46,6 +46,7 @@ Ces tâches sont les unités d'exécution des chantiers W-001 à W-006, pas de n
 | W-016 | building | P1 | W-006 ; après W-008 et W-013 ; X-008, X-010 | Compléter l'instrumentation : trafic par joueur/type, profondeur et âge des queues, corrections, percentiles frame time, mémoire managée/native et export corrélé de session. | Rapport exploitable pour 2/4/8 joueurs et réseau dégradé ; aucune queue non bornée ; seuils de release proposés à partir des mesures. Campagne en jeu requise. |
 | W-017 | building | P2 | W-006 ; après W-011 ; I-001 | Achever le routage main physique, le grip à deux mains, les équipements et customizers, avec compatibilité VR/non-VR. | Payload et delta merge testés ; pickup/transfert/release visibles correctement dans toutes les combinaisons VR/non-VR. Validation en jeu requise. |
 | W-018 | building | P0 | Après W-009 à W-017 ; Q-001 | Exécuter la campagne de qualification, archiver logs et métriques, produire la matrice de compatibilité et la checklist de release/install/rollback. | Cible de service Q-001 décidée ; scénarios P0 sans défaut ouvert ; limites P1/P2 documentées ; artifact contenant LICENSE/NOTICE installable et rejouable. |
+| W-019 | building | P1 | W-015 ; identité persistante | Capability API additive et host-only de wallet individuel, distincte du wallet vanilla partagé. Résolution exclusive des `IPlayer` wrappers par peer authentifié vers le GUID persistant ; read/credit/debit/transfer atomiques avec `requestId` immuable, replay protection durable, bornes, callbacks isolés et persistence save/reload. | API 1.3 documentée dans [INDIVIDUAL-WALLETS.md](INDIVIDUAL-WALLETS.md) ; build et 138 tests hors jeu passent. Reste un smoke test host/reconnect/save/reload avec un adapter réel ; état inchangé sans instruction utilisateur. |
 
 ### Point d'intégration du 8 septembre 2026
 

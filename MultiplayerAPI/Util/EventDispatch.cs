@@ -14,8 +14,12 @@ public static class EventDispatch
             try { handler(); }
             catch (Exception exception)
             {
-                if (onError != null) onError(exception);
-                else Trace.TraceError("MultiplayerAPI adapter callback failed: " + exception);
+                try
+                {
+                    if (onError != null) onError(exception);
+                    else Trace.TraceError("MultiplayerAPI adapter callback failed: " + exception);
+                }
+                catch { Trace.TraceError("MultiplayerAPI adapter callback and error reporter failed: " + exception); }
             }
         }
     }
@@ -28,8 +32,12 @@ public static class EventDispatch
             try { handler(value); }
             catch (Exception exception)
             {
-                if (onError != null) onError(exception);
-                else Trace.TraceError("MultiplayerAPI adapter callback failed: " + exception);
+                try
+                {
+                    if (onError != null) onError(exception);
+                    else Trace.TraceError("MultiplayerAPI adapter callback failed: " + exception);
+                }
+                catch { Trace.TraceError("MultiplayerAPI adapter callback and error reporter failed: " + exception); }
             }
         }
     }
