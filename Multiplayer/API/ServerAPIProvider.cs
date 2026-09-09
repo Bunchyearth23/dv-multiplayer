@@ -28,7 +28,12 @@ public class ServerAPIProvider : IServer, IPersistentPlayerWallets
     public event Action<IPlayer> OnPlayerReady;
     public event Action<IndividualWalletChange> OnIndividualWalletChanged;
 
-    public IndividualWalletResult ReadIndividualBalance(IPlayer player, Guid requestId) => ExecuteWallet(player, null, requestId, WalletOperationKind.Read, 0);
+    public IndividualWalletResult ReadIndividualBalance(IPlayer player, Guid requestId)
+    {
+        if (!TryResolveAuthenticatedIdentity(player, out var id)) return new(requestId, IndividualWalletStatus.InvalidPlayer, 0);
+        return individualWallets.Read(id, requestId);
+    }
+    public IndividualWalletResult EnsureIndividualBalance(IPlayer player, Guid requestId, double initialBalance) => ExecuteWallet(player, null, requestId, WalletOperationKind.Ensure, initialBalance);
     public IndividualWalletResult CreditIndividualBalance(IPlayer player, Guid requestId, double amount) => ExecuteWallet(player, null, requestId, WalletOperationKind.Credit, amount);
     public IndividualWalletResult DebitIndividualBalance(IPlayer player, Guid requestId, double amount) => ExecuteWallet(player, null, requestId, WalletOperationKind.Debit, amount);
     public IndividualWalletResult TransferIndividualBalance(IPlayer source, IPlayer destination, Guid requestId, double amount) => ExecuteWallet(source, destination, requestId, WalletOperationKind.Transfer, amount);

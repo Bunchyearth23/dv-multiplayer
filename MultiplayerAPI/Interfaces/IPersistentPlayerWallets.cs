@@ -10,6 +10,7 @@ public interface IPersistentPlayerWallets
     event Action<IndividualWalletChange> OnIndividualWalletChanged;
 
     IndividualWalletResult ReadIndividualBalance(IPlayer player, Guid requestId);
+    IndividualWalletResult EnsureIndividualBalance(IPlayer player, Guid requestId, double initialBalance);
     IndividualWalletResult CreditIndividualBalance(IPlayer player, Guid requestId, double amount);
     IndividualWalletResult DebitIndividualBalance(IPlayer player, Guid requestId, double amount);
     IndividualWalletResult TransferIndividualBalance(IPlayer source, IPlayer destination, Guid requestId, double amount);

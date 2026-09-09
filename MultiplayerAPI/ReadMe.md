@@ -7,7 +7,7 @@ Server-side `IPlayer` wrappers implement the optional `IPersistentPlayerIdentity
 
 ## Persistent individual wallets
 
-API 1.3 adds the optional host-only `IPersistentPlayerWallets` capability. Cast `MultiplayerAPI.Server` to this interface to read, credit, debit, or atomically transfer a mod-owned individual balance. Every call requires an immutable non-empty `Guid requestId`; retries return the persisted terminal result exactly once. Players are authorized from server-issued `IPlayer` wrappers and their authenticated peer, never from a client-provided username, session ID, or GUID. This capability is independent of the vanilla shared wallet. See `docs/INDIVIDUAL-WALLETS.md` for limits and the exact contract.
+API 1.4 extends the optional host-only `IPersistentPlayerWallets` capability. Cast `MultiplayerAPI.Server` to this interface to read, initialize once, credit, debit, or atomically transfer a mod-owned individual balance. Reads are authoritative and do not consume durable replay storage. Mutations require an immutable non-empty `Guid requestId`; retries return the persisted terminal result exactly once. Players are authorized from server-issued `IPlayer` wrappers and their authenticated peer, never from a client-provided username, session ID, or GUID. This capability is independent of the vanilla shared wallet. See `docs/INDIVIDUAL-WALLETS.md` for limits and the exact contract.
 
 This package is licenced under Apache 2.0, please see the [repository](https://github.com/AMacro/dv-multiplayer) for the full licence and source code.
 

@@ -5,7 +5,7 @@ using System.Globalization;
 
 namespace Multiplayer.Networking.Data.Wallets;
 
-public enum WalletOperationKind : byte { Read, Credit, Debit, Transfer }
+public enum WalletOperationKind : byte { Read, Credit, Debit, Transfer, Ensure }
 
 public sealed class WalletOperationRecord
 {
@@ -21,13 +21,24 @@ public sealed class IndividualWalletLedger
     private readonly object gate = new();
     private readonly Dictionary<Guid, double> balances = new();
     private readonly Dictionary<Guid, WalletOperationRecord> operations = new();
+    private readonly HashSet<Guid> initialized = new();
+
+    public IndividualWalletResult Read(Guid player, Guid requestId)
+    {
+        if (player == Guid.Empty) return Result(requestId, IndividualWalletStatus.InvalidPlayer);
+        if (requestId == Guid.Empty) return Result(requestId, IndividualWalletStatus.InvalidRequest);
+        lock (gate) return new IndividualWalletResult(requestId, IndividualWalletStatus.Success, Get(player));
+    }
 
     public IndividualWalletResult Execute(Guid player, Guid counterparty, Guid requestId, WalletOperationKind kind, double amount,
         Action<IndividualWalletChange> notify = null)
     {
         if (player == Guid.Empty) return Result(requestId, IndividualWalletStatus.InvalidPlayer);
         if (requestId == Guid.Empty) return Result(requestId, IndividualWalletStatus.InvalidRequest);
-        if (kind != WalletOperationKind.Read && (!Finite(amount) || amount <= 0 || amount > MaxAmount))
+        if (kind == WalletOperationKind.Read) return Read(player, requestId);
+        if (kind == WalletOperationKind.Ensure && (!Finite(amount) || amount < 0 || amount > MaxBalance))
+            return Result(requestId, IndividualWalletStatus.InvalidAmount);
+        if (kind != WalletOperationKind.Ensure && (!Finite(amount) || amount <= 0 || amount > MaxAmount))
             return Result(requestId, IndividualWalletStatus.InvalidAmount);
         if (kind == WalletOperationKind.Transfer && (counterparty == Guid.Empty || counterparty == player))
             return Result(requestId, IndividualWalletStatus.InvalidPlayer);
@@ -52,11 +63,17 @@ public sealed class IndividualWalletLedger
                 status = IndividualWalletStatus.BalanceLimitExceeded;
             else if (kind == WalletOperationKind.Transfer && other > MaxBalance - amount)
                 status = IndividualWalletStatus.BalanceLimitExceeded;
-            else if (kind == WalletOperationKind.Credit) { balances[player] = balance + amount; changes = [new(requestId, player, Guid.Empty, balance, balance + amount)]; }
-            else if (kind == WalletOperationKind.Debit) { balances[player] = balance - amount; changes = [new(requestId, player, Guid.Empty, balance, balance - amount)]; }
+            else if (kind == WalletOperationKind.Ensure && !initialized.Contains(player))
+            {
+                balances[player] = amount; initialized.Add(player);
+                changes = [new(requestId, player, Guid.Empty, balance, amount)];
+            }
+            else if (kind == WalletOperationKind.Credit) { balances[player] = balance + amount; initialized.Add(player); changes = [new(requestId, player, Guid.Empty, balance, balance + amount)]; }
+            else if (kind == WalletOperationKind.Debit) { balances[player] = balance - amount; initialized.Add(player); changes = [new(requestId, player, Guid.Empty, balance, balance - amount)]; }
             else if (kind == WalletOperationKind.Transfer)
             {
                 balances[player] = balance - amount; balances[counterparty] = other + amount;
+                initialized.Add(player); initialized.Add(counterparty);
                 changes = [new(requestId, player, counterparty, balance, balance - amount), new(requestId, counterparty, player, other, other + amount)];
             }
             double final = Get(player), finalOther = Get(counterparty);
@@ -70,16 +87,20 @@ public sealed class IndividualWalletLedger
 
     public IReadOnlyDictionary<Guid, double> SnapshotBalances() { lock (gate) return new Dictionary<Guid, double>(balances); }
     public IReadOnlyCollection<WalletOperationRecord> SnapshotOperations() { lock (gate) return new List<WalletOperationRecord>(operations.Values); }
+    public IReadOnlyCollection<Guid> SnapshotInitialized() { lock (gate) return new List<Guid>(initialized); }
 
-    public bool TryReplace(IEnumerable<KeyValuePair<Guid, double>> savedBalances, IEnumerable<WalletOperationRecord> savedOperations)
+    public bool TryReplace(IEnumerable<KeyValuePair<Guid, double>> savedBalances, IEnumerable<WalletOperationRecord> savedOperations, IEnumerable<Guid> savedInitialized = null)
     {
-        var nextBalances = new Dictionary<Guid, double>(); var nextOperations = new Dictionary<Guid, WalletOperationRecord>();
+        var nextBalances = new Dictionary<Guid, double>(); var nextOperations = new Dictionary<Guid, WalletOperationRecord>(); var nextInitialized = new HashSet<Guid>();
         if (savedBalances == null || savedOperations == null) return false;
         foreach (var pair in savedBalances)
         {
             if (pair.Key == Guid.Empty || !Finite(pair.Value) || pair.Value < 0 || pair.Value > MaxBalance || nextBalances.ContainsKey(pair.Key)) return false;
             nextBalances.Add(pair.Key, pair.Value);
         }
+        if (savedInitialized == null) foreach (var id in nextBalances.Keys) nextInitialized.Add(id);
+        else foreach (var id in savedInitialized) if (id == Guid.Empty || !nextInitialized.Add(id)) return false;
+        foreach (var id in nextBalances.Keys) if (!nextInitialized.Contains(id)) return false;
         foreach (var op in savedOperations)
         {
             if (op == null || op.RequestId == Guid.Empty || string.IsNullOrEmpty(op.Fingerprint) || op.Fingerprint.Length > 256 ||
@@ -88,7 +109,7 @@ public sealed class IndividualWalletLedger
             nextOperations.Add(op.RequestId, op);
         }
         if (nextOperations.Count > MaxOperations) return false;
-        lock (gate) { balances.Clear(); operations.Clear(); foreach (var p in nextBalances) balances.Add(p.Key, p.Value); foreach (var p in nextOperations) operations.Add(p.Key, p.Value); }
+        lock (gate) { balances.Clear(); operations.Clear(); initialized.Clear(); foreach (var p in nextBalances) balances.Add(p.Key, p.Value); foreach (var p in nextOperations) operations.Add(p.Key, p.Value); foreach (var id in nextInitialized) initialized.Add(id); }
         return true;
     }
 
