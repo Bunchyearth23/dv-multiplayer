@@ -990,11 +990,29 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         if (TrainCar.muModule == null)
             return;
 
-        if (TrainCar.muModule.frontCable.IsConnected)
-            NetworkLifecycle.Instance.Client.SendMuConnected(TrainCar.muModule.frontCable, TrainCar.muModule.frontCable.connectedTo, false);
+        SendCableState(TrainCar.muModule.frontCable);
+        SendCableState(TrainCar.muModule.rearCable);
 
-        if (TrainCar.muModule.rearCable.IsConnected)
-            NetworkLifecycle.Instance.Client.SendMuConnected(TrainCar.muModule.rearCable, TrainCar.muModule.rearCable.connectedTo, false);
+        void SendCableState(MultipleUnitCable cable)
+        {
+            if (!cable.IsConnected || cable.connectedTo == null)
+                return;
+
+            ushort otherNetId = cable.connectedTo.muModule.train.GetNetId();
+            if (NetId == 0 || otherNetId == 0)
+                return;
+
+            NetworkLifecycle.Instance.Server.SendAuthoritativePacketToAll(
+                new CommonMuConnectedPacket
+                {
+                    NetId = NetId,
+                    IsFront = cable.isFront,
+                    OtherNetId = otherNetId,
+                    OtherIsFront = cable.connectedTo.isFront,
+                    PlayAudio = false,
+                },
+                PlayerLoadingState.ReadyForTrainSets);
+        }
     }
 
     private void Server_SendCargoState()
@@ -1258,7 +1276,16 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             return;
 
         handbrakeDirty = false;
-        NetworkLifecycle.Instance.Client.SendHandbrakePositionChanged(NetId, brakeSystem.handbrakePosition);
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkLifecycle.Instance.Server.SendAuthoritativePacketToAll(
+                new CommonHandbrakePositionPacket { NetId = NetId, Position = brakeSystem.handbrakePosition },
+                PlayerLoadingState.ReadyForTrainSets);
+        }
+        else
+        {
+            NetworkLifecycle.Instance.Client.SendHandbrakePositionChanged(NetId, brakeSystem.handbrakePosition);
+        }
     }
 
     public void Common_DirtyPorts(uint[] portNetIds)
@@ -1324,7 +1351,16 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
         dirtyPorts.Clear();
 
-        NetworkLifecycle.Instance.Client.SendPorts(NetId, portIds, portValues);
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkLifecycle.Instance.Server.SendAuthoritativePacketToAll(
+                new CommonTrainPortsPacket { NetId = NetId, PortIds = portIds, PortValues = portValues },
+                PlayerLoadingState.ReadyForTrainSets);
+        }
+        else
+        {
+            NetworkLifecycle.Instance.Client.SendPorts(NetId, portIds, portValues);
+        }
     }
 
     private void Common_SendFuses()
@@ -1349,7 +1385,16 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
         dirtyFuses.Clear();
 
-        NetworkLifecycle.Instance.Client.SendFuses(NetId, fuseIds, fuseValues);
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkLifecycle.Instance.Server.SendAuthoritativePacketToAll(
+                new CommonTrainFusesPacket { NetId = NetId, FuseIds = fuseIds, FuseValues = fuseValues },
+                PlayerLoadingState.ReadyForTrainSets);
+        }
+        else
+        {
+            NetworkLifecycle.Instance.Client.SendFuses(NetId, fuseIds, fuseValues);
+        }
     }
 
     private void Common_SendPaintThemes()
@@ -1386,7 +1431,16 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
     {
         if (NetworkLifecycle.Instance.IsProcessingPacket)
             return;
-        NetworkLifecycle.Instance.Client.SendBrakeCylinderReleased(NetId);
+        if (NetworkLifecycle.Instance.IsHost())
+        {
+            NetworkLifecycle.Instance.Server.SendAuthoritativePacketToAll(
+                new CommonBrakeCylinderReleasePacket { NetId = NetId },
+                PlayerLoadingState.ReadyForTrainSets);
+        }
+        else
+        {
+            NetworkLifecycle.Instance.Client.SendBrakeCylinderReleased(NetId);
+        }
     }
 
     private void Common_OnPortUpdated(Port port, uint portNetId)

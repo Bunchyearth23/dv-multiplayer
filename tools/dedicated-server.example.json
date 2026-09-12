@@ -1,0 +1,15 @@
+{
+  "gamePath": "D:\\Steam\\steamapps\\common\\Derail Valley\\DerailValley.exe",
+  "user": "000_Player",
+  "gameMode": "Career",
+  "session": "Dedicated",
+  "saveUid": 0,
+  "port": 25000,
+  "serverName": "My Derail Valley Server",
+  "password": "change-me",
+  "maxPlayers": 8,
+  "visibility": "Friends",
+  "details": "Persistent dedicated world",
+  "headless": true,
+  "logPath": "D:\\DV-Dedicated\\server.log"
+}

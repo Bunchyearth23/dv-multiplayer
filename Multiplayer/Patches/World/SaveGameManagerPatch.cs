@@ -4,6 +4,7 @@ using HarmonyLib;
 using Multiplayer.Components.MainMenu;
 using Multiplayer.Components.Networking;
 using Multiplayer.Components.SaveGame;
+using Multiplayer.Networking.Data;
 
 namespace Multiplayer.Patches.World;
 
@@ -19,7 +20,8 @@ public static class SaveGameManager_FindStartGameData_Patch
 
     private static void StartServer(IDifficulty difficulty)
     {
-        if (NetworkLifecycle.Instance.StartServer(difficulty))
+        bool dedicated = DedicatedServerLaunchOptions.Current.Enabled;
+        if (NetworkLifecycle.Instance.StartServer(difficulty, dedicated))
             return;
 
         NetworkLifecycle.Instance.QueueMainMenuEvent(() =>

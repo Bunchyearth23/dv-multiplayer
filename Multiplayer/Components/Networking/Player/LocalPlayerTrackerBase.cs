@@ -29,6 +29,8 @@ public abstract class LocalPlayerTrackerBase : MonoBehaviour
 
     protected virtual void Start()
     {
+        if (NetworkLifecycle.Instance.Client?.IsRunning != true)
+            return;
         CoroutineManager.Instance.StartCoroutine(WaitForCustomFPS());
     }
 
@@ -36,8 +38,13 @@ public abstract class LocalPlayerTrackerBase : MonoBehaviour
     {
         yield return null;
 
+        if (NetworkLifecycle.Instance.Client?.IsRunning != true)
+            yield break;
+
         while (fps == null)
         {
+            if (NetworkLifecycle.Instance.Client?.IsRunning != true)
+                yield break;
             fps = transform.GetComponent<CustomFirstPersonController>();
             yield return null;
         }
@@ -67,7 +74,7 @@ public abstract class LocalPlayerTrackerBase : MonoBehaviour
 
     protected void OnTick(uint tick)
     {
-        if (UnloadWatcher.isUnloading)
+        if (UnloadWatcher.isUnloading || NetworkLifecycle.Instance.Client?.IsRunning != true)
             return;
 
         if (isOnCar && car == null)

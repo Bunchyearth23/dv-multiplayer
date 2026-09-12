@@ -12,7 +12,12 @@ internal static class Program
 {
     private static int Main()
     {
-        var tests = new Action[] { IndividualWalletTests.PlayersAreIsolatedAndTransfersAreAtomic,
+        var tests = new Action[] { LocalServerIdentityTests.AbsentLocalClientNeverAliasesRemotePlayers,
+            LocalServerIdentityTests.HostedIdentityRetainsEveryByteValue,
+            LocalServerIdentityTests.DedicatedStartupNeverCreatesALocalClient,
+            DedicatedServerLaunchOptionsTests.DedicatedCommandLineIsParsedWithoutUnity,
+            DedicatedServerLaunchOptionsTests.UnsafeDedicatedCommandLineIsRejected,
+            IndividualWalletTests.PlayersAreIsolatedAndTransfersAreAtomic,
             IndividualWalletTests.RetriesAreExactlyOnceAndImmutable,
             IndividualWalletTests.InvalidAndOverflowValuesAreRejected,
             IndividualWalletTests.SaveReloadPreservesBalancesAndReplayProtection,

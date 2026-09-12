@@ -52,6 +52,8 @@ public class Settings : UnityModManager.ModSettings, IDrawable
     public int Port = 7777;
     [Draw("Details", Tooltip = "Details shown in the server browser.")]
     public string Details = "";
+    [Draw("Run as Dedicated Server (experimental)", Tooltip = "Starts the selected hosted save without a local loopback player. The Unity game runtime and world loading are still required.")]
+    public bool DedicatedServer;
 
     [Space(10)]
     [Header("Host permissions (clients)")]

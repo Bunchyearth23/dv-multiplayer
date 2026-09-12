@@ -13,13 +13,17 @@ public class NetworkedMapMarkersController : MonoBehaviour
 
     protected void Awake()
     {
+        var client = NetworkLifecycle.Instance.Client;
+        if (client?.ClientPlayerManager == null)
+            return;
+
         markersController = GetComponent<MapMarkersController>();
         textPrefab = markersController.GetComponentInChildren<TMP_Text>().gameObject;
-        foreach (NetworkedPlayer networkedPlayer in NetworkLifecycle.Instance.Client.ClientPlayerManager.Players)
+        foreach (NetworkedPlayer networkedPlayer in client.ClientPlayerManager.Players)
             OnPlayerConnected(networkedPlayer);
-        NetworkLifecycle.Instance.Client.ClientPlayerManager.OnPlayerConnected += OnPlayerConnected;
-        NetworkLifecycle.Instance.Client.ClientPlayerManager.OnPlayerDisconnected += OnPlayerDisconnected;
-        NetworkLifecycle.Instance.Client.ClientPlayerManager.OnPlayerPrefsUpdated += OnPlayerPrefsUpdated;
+        client.ClientPlayerManager.OnPlayerConnected += OnPlayerConnected;
+        client.ClientPlayerManager.OnPlayerDisconnected += OnPlayerDisconnected;
+        client.ClientPlayerManager.OnPlayerPrefsUpdated += OnPlayerPrefsUpdated;
 
         NetworkLifecycle.Instance.OnTick += OnTick;
     }
@@ -101,7 +105,8 @@ public class NetworkedMapMarkersController : MonoBehaviour
 
     public void UpdatePlayers()
     {
-        if (playerIndicators == null)
+        var client = NetworkLifecycle.Instance.Client;
+        if (playerIndicators == null || client?.ClientPlayerManager == null)
         {
             Multiplayer.LogDebug(() => $"NetworkedWorldMap.UpdatePlayers() playerIndicators: {playerIndicators != null}, count: {playerIndicators?.Count}");
             return;
@@ -112,7 +117,7 @@ public class NetworkedMapMarkersController : MonoBehaviour
             if(kvp.Value == null)
                 Multiplayer.LogDebug(() => $"NetworkedWorldMap.UpdatePlayers() key: {kvp.Key}, value is null: {kvp.Value == null}");
 
-            if (!NetworkLifecycle.Instance.Client.ClientPlayerManager.TryGetPlayer(kvp.Key.PlayerId, out NetworkedPlayer networkedPlayer))
+            if (!client.ClientPlayerManager.TryGetPlayer(kvp.Key.PlayerId, out NetworkedPlayer networkedPlayer))
             {
                 Multiplayer.LogWarning($"Player indicator for {kvp.Key} exists but {nameof(NetworkedPlayer)} does not!");
                 OnPlayerDisconnected(kvp.Key);

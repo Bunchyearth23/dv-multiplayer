@@ -37,7 +37,6 @@ internal class ClientTest : MonoBehaviour
         {
             if (MultiplayerAPI.Instance.IsDedicatedServer)
             {
-                //Dedicated servers have not been implemented yet, IsDedicatedServer will always return false
                 Log("We are a dedicated server");
             }
             else

@@ -371,7 +371,8 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
         }
         byte? ownerId = networkedItem.OwnerId >= 0 ? (byte?)networkedItem.OwnerId : null;
         // The host's locally held items may not yet have produced a network snapshot.
-        if (networkedItem.Item.IsGrabbed() || StorageController.Instance.StorageInventory.ContainsItem(networkedItem.Item))
+        if (NetworkLifecycle.Instance.Server.SelfId.HasValue &&
+            (networkedItem.Item.IsGrabbed() || StorageController.Instance.StorageInventory.ContainsItem(networkedItem.Item)))
             ownerId = NetworkLifecycle.Instance.Server.SelfId;
 
         float destinationDistance = Vector3.Distance(player.AbsoluteWorldPosition, snapshot.ItemPosition);

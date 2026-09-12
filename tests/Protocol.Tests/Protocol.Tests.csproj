@@ -5,6 +5,9 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Multiplayer/Networking/Data/LocalServerIdentity.cs" Link="Production/LocalServerIdentity.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/ServerStartupMode.cs" Link="Production/ServerStartupMode.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/DedicatedServerLaunchOptions.cs" Link="Production/DedicatedServerLaunchOptions.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Train/TrainCompositionPolicy.cs" Link="Production/TrainCompositionPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Train/FastTravelOperation.cs" Link="Production/FastTravelOperation.cs" />
     <Compile Include="../../Multiplayer/Networking/Packets/Serverbound/Train/ServerboundFastTravelPacket.cs" Link="Production/ServerboundFastTravelPacket.cs" />

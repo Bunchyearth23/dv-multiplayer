@@ -37,6 +37,8 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
 
     public bool IsServerRunning => Server?.IsRunning ?? false;
     public bool IsClientRunning => Client?.IsRunning ?? false;
+    /// <summary>True when this process runs a server without a loopback player client.</summary>
+    public bool IsDedicatedServer { get; private set; }
 
     public bool IsProcessingPacket => Client?.IsProcessingPacket ?? false;
 
@@ -135,6 +137,32 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
 
     public bool StartServer(IDifficulty difficulty)
     {
+        return StartServer(difficulty, global::Multiplayer.Networking.Data.ServerStartupMode.Hosted);
+    }
+
+    /// <summary>Starts a server-only process. World bootstrap still requires the Unity game runtime.</summary>
+    public bool StartDedicatedServer(IDifficulty difficulty)
+    {
+        var previousSinglePlayer = IsSinglePlayer;
+        IsSinglePlayer = false;
+        try
+        {
+            return StartServer(difficulty, global::Multiplayer.Networking.Data.ServerStartupMode.Dedicated);
+        }
+        finally
+        {
+            if (Server == null)
+                IsSinglePlayer = previousSinglePlayer;
+        }
+    }
+
+    public bool StartServer(IDifficulty difficulty, bool dedicated)
+    {
+        return StartServer(difficulty, global::Multiplayer.Networking.Data.ServerStartupModes.FromDedicatedFlag(dedicated));
+    }
+
+    private bool StartServer(IDifficulty difficulty, global::Multiplayer.Networking.Data.ServerStartupMode startupMode)
+    {
         int port = Multiplayer.Settings.Port;
 
         if (Server != null)
@@ -155,12 +183,39 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
             return false;
 
         Server = server;
+        IsDedicatedServer = !global::Multiplayer.Networking.Data.ServerStartupModes.StartsLocalClient(startupMode);
+        try
+        {
+            // Register server API before a loopback client can observe the session.
+            var serverAPI = new ServerAPIProvider(server);
+            MultiplayerAPI.RegisterServer(serverAPI);
 
-        // Register server API
-        var serverAPI = new ServerAPIProvider(server);
-        MultiplayerAPI.RegisterServer(serverAPI);
-
-        StartClient(IPAddress.Loopback.ToString(), port, Multiplayer.Settings.Password, IsSinglePlayer, null);
+            if (global::Multiplayer.Networking.Data.ServerStartupModes.StartsLocalClient(startupMode))
+                StartClient(IPAddress.Loopback.ToString(), port, Multiplayer.Settings.Password, IsSinglePlayer, null);
+        }
+        catch
+        {
+            if (Client != null)
+            {
+                try { Client.Stop(); }
+                finally
+                {
+                    MultiplayerAPI.ClearClient();
+                    Client = null;
+                }
+            }
+            try { MultiplayerAPI.ClearServer(); }
+            finally
+            {
+                try { server.Stop(); }
+                finally
+                {
+                    Server = null;
+                    IsDedicatedServer = false;
+                }
+            }
+            throw;
+        }
 
         //reset for next game
         IsSinglePlayer = true;
@@ -174,15 +229,31 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
         if (Client != null)
             throw new InvalidOperationException("NetworkManager already exists!");
         NetworkClient client = new(Multiplayer.Settings, isSinglePlayer);
-        client.Start(address, port, password, isSinglePlayer, onDisconnect);
+        bool clientApiRegistered = false;
+        try
+        {
+            client.Start(address, port, password, isSinglePlayer, onDisconnect);
+            Client = client;
 
-        Client = client;
+            // Register client API
+            var clientAPI = new ClientAPIProvider(client);
+            MultiplayerAPI.RegisterClient(clientAPI);
+            clientApiRegistered = true;
 
-        // Register client API
-        var clientAPI = new ClientAPIProvider(client);
-        MultiplayerAPI.RegisterClient(clientAPI);
-
-        OnSettingsUpdated(Multiplayer.Settings); // Show stats if enabled
+            OnSettingsUpdated(Multiplayer.Settings); // Show stats if enabled
+        }
+        catch
+        {
+            try { client.Stop(); }
+            finally
+            {
+                if (clientApiRegistered)
+                    MultiplayerAPI.ClearClient();
+                if (Client == client)
+                    Client = null;
+            }
+            throw;
+        }
     }
 
     private IEnumerator PollEvents()
@@ -262,6 +333,7 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
                 CleanupStep("server", () => Server.Stop());
                 CleanupStep("server API", MultiplayerAPI.ClearServer);
                 Server = null;
+                IsDedicatedServer = false;
             }
             if (Client != null)
             {

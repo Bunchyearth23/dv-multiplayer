@@ -24,8 +24,13 @@ public class NetworkStatsGui : MonoBehaviour
 
     public void Show(NetStatistics clientStats, NetStatistics serverStats)
     {
+        if (clientStats == null && serverStats == null)
+        {
+            Hide();
+            return;
+        }
         this.clientStats = clientStats;
-        clientStats.Reset();
+        clientStats?.Reset();
         this.serverStats = serverStats;
         serverStats?.Reset();
         updateCoro = StartCoroutine(UpdateStats());
@@ -43,10 +48,20 @@ public class NetworkStatsGui : MonoBehaviour
     {
         while (true)
         {
-            bytesReceivedPerSecond = serverStats != null ? serverStats.BytesReceived - clientStats.BytesSent : clientStats.BytesReceived;
-            bytesSentPerSecond = serverStats != null ? serverStats.BytesSent - clientStats.BytesReceived : clientStats.BytesReceived;
-            packetsReceivedPerSecond = serverStats != null ? serverStats.PacketsReceived - clientStats.PacketsSent : clientStats.PacketsReceived;
-            packetsSentPerSecond = serverStats != null ? serverStats.PacketsSent - clientStats.PacketsReceived : clientStats.PacketsReceived;
+            if (serverStats != null)
+            {
+                bytesReceivedPerSecond = serverStats.BytesReceived - (clientStats?.BytesSent ?? 0);
+                bytesSentPerSecond = serverStats.BytesSent - (clientStats?.BytesReceived ?? 0);
+                packetsReceivedPerSecond = serverStats.PacketsReceived - (clientStats?.PacketsSent ?? 0);
+                packetsSentPerSecond = serverStats.PacketsSent - (clientStats?.PacketsReceived ?? 0);
+            }
+            else
+            {
+                bytesReceivedPerSecond = clientStats?.BytesReceived ?? 0;
+                bytesSentPerSecond = clientStats?.BytesSent ?? 0;
+                packetsReceivedPerSecond = clientStats?.PacketsReceived ?? 0;
+                packetsSentPerSecond = clientStats?.PacketsSent ?? 0;
+            }
             //packetsWrittenByType = serverStats?.PacketsWrittenByType; //disabled for steamnetworking
             //bytesWrittenByType = serverStats?.BytesWrittenByType;     //disabled for steamnetworking
             serverStats?.Reset();

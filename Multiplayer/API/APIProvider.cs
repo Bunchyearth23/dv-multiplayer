@@ -25,7 +25,7 @@ public class APIProvider : IMultiplayerAPI
 
     public bool IsHost => NetworkLifecycle.Instance.IsHost();
 
-    public bool IsDedicatedServer => false; //feature not implemented
+    public bool IsDedicatedServer => NetworkLifecycle.Instance.IsDedicatedServer;
 
     public bool IsSinglePlayer => NetworkLifecycle.Instance.IsServerRunning && (NetworkLifecycle.Instance?.Server.IsSinglePlayer ?? false);
 

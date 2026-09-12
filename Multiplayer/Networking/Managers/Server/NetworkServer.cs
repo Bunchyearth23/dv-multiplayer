@@ -81,20 +81,19 @@ public partial class NetworkServer : NetworkManager
     public IReadOnlyCollection<ServerPlayerWrapper> ServerPlayerWrappers => PlayerWrapperCache.Values;
     public int PlayerCount => ServerPlayers.Count;
 
-    private ITransportPeer _selfPeer;
     public ITransportPeer SelfPeer
     {
         get
         {
-            if (_selfPeer != null)
-                return _selfPeer;
-
-            peers.TryGetValue(SelfId, out _selfPeer);
-            return _selfPeer;
+            var localId = SelfId;
+            if (!localId.HasValue) return null;
+            peers.TryGetValue(localId.Value, out var peer);
+            return peer;
         }
     }
 
-    public byte SelfId => NetworkLifecycle.Instance.Client?.PlayerId ?? 0;
+    public byte? SelfId => global::Multiplayer.Networking.Data.LocalServerIdentity.Resolve(
+        NetworkLifecycle.Instance.Client?.IsRunning == true, NetworkLifecycle.Instance.Client?.PlayerId);
 
     public readonly IDifficulty Difficulty;
     private bool IsLoaded;
@@ -1275,6 +1274,12 @@ public partial class NetworkServer : NetworkManager
                 updates.Add(new ItemUpdateData { ItemNetId = id, UpdateType = ItemUpdateData.ItemUpdateType.Destroy });
         }
         SendItemsChangePacket(updates.Where(item => item != null).ToList(), player);
+    }
+
+    /// <summary>Broadcasts state produced by the authoritative Unity simulation itself.</summary>
+    internal void SendAuthoritativePacketToAll<T>(T packet, PlayerLoadingState minimumLoadState, bool excludeSelf = true) where T : class, new()
+    {
+        SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, minimumLoadState, null, excludeSelf);
     }
 
     private void OnTrainRecovery(ServerboundTrainRecoveryPacket packet, ITransportPeer peer)
