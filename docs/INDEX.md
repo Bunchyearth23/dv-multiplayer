@@ -1,5 +1,7 @@
 # État du multijoueur
 
+2026-09-14 : overflow réseau remplacé par un refus avec reconnexion, file bornée en nombre/octets/âge, budget d'application partagé client/serveur et lectures de positions d'objets mutualisées par tick. `tools/Validate.ps1` passe avec 150 tests, 0 échec. Build Release déployé dans `unity-candidate-20260914-main-thread` ; comparaison officielle globale : 95 SAME, réglages préservés. Cadence physique conservée ; surcharge/late join et coûts cumulés à qualifier en jeu. [Corrections, preuves de déploiement et limites](../../dv-company/docs/UNITY-MAIN-THREAD-CORRECTIONS-2026-09-14.md). États W inchangés.
+
 Audit du 6 septembre 2026, sur les sources locales. Cet index constitue le point d'entrée pour savoir ce qu'il reste à faire. Il n'existait pas avant cet audit.
 
 Audit initial statique, suivi de lots d'implémentation le 6 septembre 2026. La compilation du mod contre le jeu local réussit et 143 tests automatisés passent ; aucun test en jeu n'a été exécuté. `Directory.Build.targets` a été configuré localement et les deux assemblies de scripts Unity compilées depuis les sources. L'assetbundle de distribution reste absent. Les constats initiaux ci-dessous restent ouverts jusqu'à validation des parcours complets. La distribution conserve le texte Apache-2.0 upstream intact, embarque un NOTICE attribuant les projets AMacro/Insprill et les modifications BDVM 2026, et vérifie ces éléments localement et en CI.

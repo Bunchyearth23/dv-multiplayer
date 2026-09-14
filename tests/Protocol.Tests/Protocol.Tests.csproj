@@ -5,6 +5,7 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Multiplayer/Utils/BoundedWorkQueue.cs" Link="Production/BoundedWorkQueue.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/LocalServerIdentity.cs" Link="Production/LocalServerIdentity.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/ServerStartupMode.cs" Link="Production/ServerStartupMode.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/DedicatedServerLaunchOptions.cs" Link="Production/DedicatedServerLaunchOptions.cs" />

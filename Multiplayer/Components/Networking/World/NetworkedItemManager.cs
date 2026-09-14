@@ -125,7 +125,8 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
     {
         if (!NetworkLifecycle.Instance.IsClientRunning && !NetworkLifecycle.Instance.IsServerRunning) return;
         ProcessReceived();
-        foreach (var item in NetworkedItem.GetAll().ToArray())
+        var allItems = NetworkedItem.GetAll().ToArray();
+        foreach (var item in allItems)
         {
             if (item == null || item.NetId == 0) continue;
             try { item.RefreshRemotePresentation(); }
@@ -134,8 +135,8 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
 
         if (NetworkLifecycle.Instance.IsHost())
         {
-            UpdatePlayerItemLists();
-            ProcessChanged(tick);
+            UpdatePlayerItemLists(allItems);
+            ProcessChanged(tick, allItems);
         }
         else
         {
@@ -146,7 +147,8 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
     private void ProcessReceived()
     {
         int remaining = MaxSnapshotsPerTick;
-        while (remaining-- > 0 && ReceivedSnapshots.TryDequeue(out var snapshotInfo))
+        var budget = System.Diagnostics.Stopwatch.StartNew();
+        while (remaining-- > 0 && budget.Elapsed.TotalMilliseconds < 0.75d && ReceivedSnapshots.TryDequeue(out var snapshotInfo))
         {
             ItemUpdateData snapshot = snapshotInfo.Item1;
             try
@@ -179,31 +181,33 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
 
     #region Server
 
-    private void UpdatePlayerItemLists()
+    private void UpdatePlayerItemLists(NetworkedItem[] allItems)
     {
         float currentTime = Time.time;
 
-        var allItems = NetworkedItem.GetAll().ToArray();
+        // Capture native positions once per tick, instead of once per player/item pair.
+        var positions = new List<(NetworkedItem item, Vector3 position, int ownerId)>();
+        foreach (var item in allItems)
+        {
+            if (item == null || item.NetId == 0 || !item.CanApplySnapshot) continue;
+            var position = item.transform.position;
+            if (item.OwnerId >= 0 && NetworkLifecycle.Instance.Server.TryGetServerPlayer((byte)item.OwnerId, out var owner))
+                position = owner.WorldPosition;
+            positions.Add((item, position, item.OwnerId));
+        }
 
         foreach (var player in NetworkLifecycle.Instance.Server.ServerPlayers)
         {
             if (player.LoadingState < PlayerLoadingState.ReadyForItems)
                 continue;
 
-            foreach (var item in allItems)
+            var playerPosition = player.WorldPosition;
+            foreach (var observation in positions)
             {
-                if (item == null || item.NetId == 0 || !item.CanApplySnapshot)
-                {
-                    NetworkLifecycle.Instance.Server.LogDebug(() => $"UpdatePlayerItemLists() Null item found in allItems!");
-                    continue;
-                }
+                var item = observation.item;
+                float sqrDistance = (playerPosition - observation.position).sqrMagnitude;
 
-                Vector3 itemPosition = item.transform.position;
-                if (item.OwnerId >= 0 && NetworkLifecycle.Instance.Server.TryGetServerPlayer((byte)item.OwnerId, out var owner))
-                    itemPosition = owner.WorldPosition;
-                float sqrDistance = (player.WorldPosition - itemPosition).sqrMagnitude;
-
-                if (item.OwnerId == player.PlayerId || sqrDistance <= MAX_DISTANCE_TO_ITEM_SQR)
+                if (observation.ownerId == player.PlayerId || sqrDistance <= MAX_DISTANCE_TO_ITEM_SQR)
                 {
                     //NetworkLifecycle.Instance.Server.LogDebug(() => $"UpdatePlayerItemLists() Adding for player: {player?.Username}, Nearby Item: {item?.NetId}, {item?.name}");
                     player.NearbyItems[item] = currentTime;
@@ -231,10 +235,10 @@ public partial class NetworkedItemManager : SingletonBehaviour<NetworkedItemMana
             .Where(snapshot => snapshot != null).ToList();
     }
 
-    private void ProcessChanged(uint tick)
+    private void ProcessChanged(uint tick, NetworkedItem[] allItems)
     {
         var dirtyItems = new Dictionary<ushort, ItemUpdateData>();
-        foreach (var item in NetworkedItem.GetAll().ToArray())
+        foreach (var item in allItems)
         {
             if (item == null || item.NetId == 0 || !item.CanApplySnapshot) continue;
             try

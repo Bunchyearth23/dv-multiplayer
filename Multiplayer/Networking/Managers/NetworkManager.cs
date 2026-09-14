@@ -13,6 +13,9 @@ using Multiplayer.Utils;
 using System;
 using System.Net;
 using System.Net.Sockets;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Threading;
 
 namespace Multiplayer.Networking.Managers;
 
@@ -24,6 +27,13 @@ public abstract class NetworkManager
     protected readonly NetDataWriter cachedWriter = new();
 
     private readonly ITransport transport;
+    private const int MaximumQueuedPackets = 2048;
+    private const int MaximumPacketBytes = 4 * 1024 * 1024;
+    private const long MaximumQueuedBytes = 16L * 1024 * 1024;
+    private const double MaximumPacketAgeSeconds = 10;
+    private readonly BoundedWorkQueue<PendingPacket> pendingPackets = new(MaximumQueuedPackets, MaximumQueuedBytes);
+    private System.Runtime.CompilerServices.ConditionalWeakTable<ITransportPeer, Rejection> rejectedPeers = new();
+    private sealed class Rejection { public int Disconnected; }
     //protected readonly NetManager netManager;
 
     protected abstract string LogPrefix { get; }
@@ -87,6 +97,45 @@ public abstract class NetworkManager
         transport?.PollEvents();
     }
 
+    /// <summary>
+    /// Applies already-copied packets on the Unity thread under a bounded budget.
+    /// Steam callbacks only copy bytes into the queue, so a burst cannot monopolize
+    /// the transport poll or a single frame. Packet handlers remain on Unity because
+    /// the existing handlers access Unity objects and game state.
+    /// </summary>
+    public int ProcessPendingPackets(double budgetMilliseconds)
+    {
+        if (budgetMilliseconds <= 0) return 0;
+        var watch = Stopwatch.StartNew();
+        var processed = 0;
+        while (watch.Elapsed.TotalMilliseconds < budgetMilliseconds && pendingPackets.TryDequeue(out var packet))
+        {
+            try
+            {
+                if (packet.Peer == null || rejectedPeers.TryGetValue(packet.Peer, out _)) continue;
+                if ((Stopwatch.GetTimestamp() - packet.ReceivedAt) / (double)Stopwatch.Frequency > MaximumPacketAgeSeconds)
+                {
+                    RejectOverloadedPeer(packet.Peer, "packet age exceeded");
+                    continue;
+                }
+                CampaignTraffic.Record("in", packet.Peer?.Id ?? -1, packet.DeliveryMethod + "_ch" + packet.Channel, packet.Buffer.Length);
+                IsProcessingPacket = true;
+                netPacketProcessor.ReadAllPackets(new NetDataReader(packet.Buffer), packet.Peer);
+            }
+            catch (ParseException e)
+            {
+                Multiplayer.LogWarning($"[{GetType()}] Failed to parse packet: {e.Message}\r\n{e.StackTrace}");
+            }
+            finally
+            {
+                IsProcessingPacket = false;
+            }
+            processed++;
+            if (watch.Elapsed.TotalMilliseconds >= budgetMilliseconds) break;
+        }
+        return processed;
+    }
+
     public virtual bool Start()
     {
         NetIdProvider.Instance.CheckInitialization();
@@ -112,6 +161,8 @@ public abstract class NetworkManager
         try { transport.Stop(true); }
         finally
         {
+            pendingPackets.Clear();
+            rejectedPeers = new();
             transport.OnConnectionRequest -= OnConnectionRequest;
             transport.OnPeerConnected -= OnPeerConnected;
             transport.OnPeerDisconnected -= OnPeerDisconnected;
@@ -165,21 +216,37 @@ public abstract class NetworkManager
     #region Net Events
     public void OnNetworkReceive(ITransportPeer peer, NetDataReader reader, byte channel, DeliveryMethod deliveryMethod)
     {
-        //LogDebug(() => $"NetworkManager.OnNetworkReceive()");
-        try
+        if (peer == null || rejectedPeers.TryGetValue(peer, out _)) return;
+        if (reader.AvailableBytes > MaximumPacketBytes)
         {
-            CampaignTraffic.Record("in", peer?.Id ?? -1, deliveryMethod + "_ch" + channel, reader.AvailableBytes);
-            IsProcessingPacket = true;
-            netPacketProcessor.ReadAllPackets(reader, peer);
+            RejectOverloadedPeer(peer, "packet size exceeded");
+            return;
         }
-        catch (ParseException e)
-        {
-            Multiplayer.LogWarning($"[{GetType()}] Failed to parse packet: {e.Message}\r\n{e.StackTrace}");
-        }
-        finally
-        {
-            IsProcessingPacket = false;
-        }
+        var bytes = reader.GetRemainingBytes();
+        if (bytes == null || bytes.Length == 0) return;
+        if (!pendingPackets.TryEnqueue(new PendingPacket(peer, bytes, channel, deliveryMethod), bytes.Length))
+            RejectOverloadedPeer(peer, "packet queue capacity exceeded");
+    }
+
+    private void RejectOverloadedPeer(ITransportPeer peer, string reason)
+    {
+        var rejection = rejectedPeers.GetValue(peer, _ => new Rejection());
+        if (Interlocked.Exchange(ref rejection.Disconnected, 1) != 0) return;
+        // Never apply a newer reliable packet ahead of the FIFO. This stream can
+        // no longer be completed: reconnect/late join supplies a fresh baseline.
+        LogWarning($"Disconnecting peer {peer.Id}: {reason}; reconnect to resynchronize.");
+        peer.Disconnect();
+    }
+
+    private sealed class PendingPacket
+    {
+        public readonly ITransportPeer? Peer;
+        public readonly byte[] Buffer;
+        public readonly byte Channel;
+        public readonly DeliveryMethod DeliveryMethod;
+        public readonly long ReceivedAt = Stopwatch.GetTimestamp();
+        public PendingPacket(ITransportPeer? peer, byte[] buffer, byte channel, DeliveryMethod deliveryMethod)
+        { Peer = peer; Buffer = buffer; Channel = channel; DeliveryMethod = deliveryMethod; }
     }
 
     public void OnNetworkError(IPEndPoint endPoint, SocketError socketError)

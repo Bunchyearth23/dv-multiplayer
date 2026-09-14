@@ -23,6 +23,7 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
 {
     public const byte TICK_RATE = 24;
     private const float TICK_INTERVAL = 1.0f / TICK_RATE;
+    private const double PACKET_APPLY_BUDGET_MS = 1.5d;
 
     public LobbyServerData serverData;
     public bool IsPublicGame { get; set; } = false;
@@ -258,6 +259,7 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
 
     private IEnumerator PollEvents()
     {
+        var tickWait = new WaitForSecondsRealtime(0f);
         while (!UnloadWatcher.isQuitting)
         {
             Tick++;
@@ -285,9 +287,18 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
             if (Server != null)
                 TickManager(Server);
 
+            // Client and server share one application budget; alternate first
+            // turn so hosting cannot starve either side under sustained traffic.
+            var packetBudget = System.Diagnostics.Stopwatch.StartNew();
+            var first = Tick % 2 == 0 ? (NetworkManager)Client : Server;
+            var second = Tick % 2 == 0 ? (NetworkManager)Server : Client;
+            ProcessPendingPackets(first, packetBudget);
+            ProcessPendingPackets(second, packetBudget);
+
             float elapsedTime = tickTimer.Stop();
             float remainingTime = Mathf.Max(0f, TICK_INTERVAL - elapsedTime);
-            yield return remainingTime < 0.001f ? null : new WaitForSecondsRealtime(remainingTime);
+            if (remainingTime < 0.001f) yield return null;
+            else { tickWait.waitTime = remainingTime; yield return tickWait; }
         }
     }
 
@@ -310,6 +321,15 @@ public class NetworkLifecycle : SingletonBehaviour<NetworkLifecycle>
         {
             tickWatchdog.Stop(time => manager.LogWarning($"PollEvents took {time} ms!"));
         }
+    }
+
+    private void ProcessPendingPackets(NetworkManager manager, System.Diagnostics.Stopwatch sharedBudget)
+    {
+        if (manager == null) return;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var processed = manager.ProcessPendingPackets(Math.Max(0d, PACKET_APPLY_BUDGET_MS - sharedBudget.Elapsed.TotalMilliseconds));
+        if (processed > 0)
+            manager.LogDebug(() => $"Applied {processed} queued packet(s) in {watch.Elapsed.TotalMilliseconds:F2} ms; budget={PACKET_APPLY_BUDGET_MS:F2} ms.");
     }
 
     private bool stopping;

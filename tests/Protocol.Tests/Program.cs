@@ -12,7 +12,9 @@ internal static class Program
 {
     private static int Main()
     {
-        var tests = new Action[] { LocalServerIdentityTests.AbsentLocalClientNeverAliasesRemotePlayers,
+        var tests = new Action[] { BoundedWorkQueueTests.OverflowPreservesOrderAndCapacity,
+            BoundedWorkQueueTests.ConcurrentAdmissionNeverExceedsLimits,
+            LocalServerIdentityTests.AbsentLocalClientNeverAliasesRemotePlayers,
             LocalServerIdentityTests.HostedIdentityRetainsEveryByteValue,
             LocalServerIdentityTests.DedicatedStartupNeverCreatesALocalClient,
             DedicatedServerLaunchOptionsTests.DedicatedCommandLineIsParsedWithoutUnity,
