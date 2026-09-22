@@ -17,45 +17,16 @@ using MPAPI.Util;
 
 namespace Multiplayer.API;
 
-public class ServerAPIProvider : IServer, IPersistentPlayerWallets
+public partial class ServerAPIProvider : IServer, IPersistentPlayerWallets
 {
     private readonly NetworkServer server;
-    private readonly IndividualWalletLedger individualWallets = new();
-    internal static ServerAPIProvider Current { get; private set; }
+
+
 
     public event Action<IPlayer> OnPlayerConnected;
     public event Action<IPlayer> OnPlayerDisconnected;
     public event Action<IPlayer> OnPlayerReady;
-    public event Action<IndividualWalletChange> OnIndividualWalletChanged;
 
-    public IndividualWalletResult ReadIndividualBalance(IPlayer player, Guid requestId)
-    {
-        if (!TryResolveAuthenticatedIdentity(player, out var id)) return new(requestId, IndividualWalletStatus.InvalidPlayer, 0);
-        return individualWallets.Read(id, requestId);
-    }
-    public IndividualWalletResult EnsureIndividualBalance(IPlayer player, Guid requestId, double initialBalance) => ExecuteWallet(player, null, requestId, WalletOperationKind.Ensure, initialBalance);
-    public IndividualWalletResult CreditIndividualBalance(IPlayer player, Guid requestId, double amount) => ExecuteWallet(player, null, requestId, WalletOperationKind.Credit, amount);
-    public IndividualWalletResult DebitIndividualBalance(IPlayer player, Guid requestId, double amount) => ExecuteWallet(player, null, requestId, WalletOperationKind.Debit, amount);
-    public IndividualWalletResult TransferIndividualBalance(IPlayer source, IPlayer destination, Guid requestId, double amount) => ExecuteWallet(source, destination, requestId, WalletOperationKind.Transfer, amount);
-
-    private IndividualWalletResult ExecuteWallet(IPlayer player, IPlayer counterparty, Guid requestId, WalletOperationKind kind, double amount)
-    {
-        if (!TryResolveAuthenticatedIdentity(player, out var id) || kind == WalletOperationKind.Transfer && !TryResolveAuthenticatedIdentity(counterparty, out _))
-            return new(requestId, IndividualWalletStatus.InvalidPlayer, 0);
-        Guid other = Guid.Empty;
-        if (counterparty != null) TryResolveAuthenticatedIdentity(counterparty, out other);
-        return individualWallets.Execute(id, other, requestId, kind, amount, change => EventDispatch.Isolated(OnIndividualWalletChanged, change, exception => server.LogError($"Individual wallet callback failed: {exception}")));
-    }
-
-    private bool TryResolveAuthenticatedIdentity(IPlayer player, out Guid identity)
-    {
-        identity = Guid.Empty;
-        if (player is not ServerPlayerWrapper wrapper || wrapper.Peer == null || !server.TryGetServerPlayer(wrapper.Peer, out var authenticated) || !ReferenceEquals(authenticated, wrapper._serverPlayer) || authenticated.Guid == Guid.Empty) return false;
-        identity = authenticated.Guid;
-        return true;
-    }
-
-    internal JObject SaveIndividualWallets() => IndividualWalletStoreCodec.Write(individualWallets);
 
     #region Server Properties
 
@@ -243,6 +214,7 @@ public class ServerAPIProvider : IServer, IPersistentPlayerWallets
     private void OnPlayerReadyInternal(ServerPlayer serverPlayer)
     {
         OnPlayerReady?.Invoke(server.GetWrapper(serverPlayer));
+        server.SendIndividualMoney(serverPlayer, ReadPlayerWallet(serverPlayer));
     }
     #endregion
 }

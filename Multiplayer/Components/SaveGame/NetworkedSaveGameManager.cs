@@ -30,15 +30,14 @@ public class NetworkedSaveGameManager : SingletonBehaviour<NetworkedSaveGameMana
         base.Awake();
         if (!NetworkLifecycle.Instance.IsHost())
             return;
-        var inventory = Inventory.Instance;
         var licenses = LicenseManager.Instance;
-        inventory.MoneyChanged += Server_OnMoneyChanged;
+
         licenses.LicenseAcquired += Server_OnLicenseAcquired;
         licenses.JobLicenseAcquired += Server_OnJobLicenseAcquired;
         licenses.GarageUnlocked += Server_OnGarageUnlocked;
         unsubscribe = () =>
         {
-            if (inventory != null) inventory.MoneyChanged -= Server_OnMoneyChanged;
+
             if (licenses == null) return;
             licenses.LicenseAcquired -= Server_OnLicenseAcquired;
             licenses.JobLicenseAcquired -= Server_OnJobLicenseAcquired;
@@ -53,11 +52,6 @@ public class NetworkedSaveGameManager : SingletonBehaviour<NetworkedSaveGameMana
     }
 
     #region Server
-
-    private static void Server_OnMoneyChanged(double oldAmount, double newAmount)
-    {
-        NetworkLifecycle.Instance.Server?.SendMoney((float)newAmount);
-    }
 
     private static void Server_OnLicenseAcquired(GeneralLicenseType_v2 license)
     {

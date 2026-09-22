@@ -12,6 +12,8 @@ Le script compile les deux assemblies de scripts Unity à partir des sources pr�
 
 `SkipMultiplayerPostBuild=true` désactive la génération documentaire, le packaging et la copie dans le jeu pour cette validation. Un build normal conserve le comportement précédent. Les assemblies de scripts produites dans `build` servent à la compilation : le script ne génère pas `multiplayer.assetbundle` et ne produit donc pas un package jouable complet. Utiliser le workflow Unity du README principal pour les assets de distribution.
 
+Les suites `ShopWallet.Tests` et `ShopBackend.Tests` sont aussi exécutées : les vrais patches Harmony sont appliqués à des surfaces natives simulées ; le vrai backend est vérifié avec un prefab dont ItemBase apparaît seulement à l'activation, puis avec replay, concurrence sur le dernier article et échecs compensés. Ces fixtures ne prouvent pas le comportement physique Unity ni la réplication réelle des objets. Voir [le correctif magasin du 18 septembre](../docs/SHOP-RUNTIME-2026-09-18.md).
+
 Couverture initiale : aller-retour raw/compressed et valeurs d'items, rejet atomique d'un batch tronqué, compteurs invalides, données compressées corrompues, limite de décompression, exclusion de la capacité inutilisée du writer, propagation des erreurs de sérialisation.
 
 Deuxième lot : aller-retour d'une mise à jour de position seule, policy serveur de possession et de distance, identité du demandeur, drops/throws, validation de la cible d'attachement, flags invalides, interactions sur objets non possédés et identifiants joueurs de 0 à 255. Total : 17 tests. Les tests de policy fournissent les faits serveur en entrée ; ils ne simulent pas la physique Unity, la queue de réception ou le rendu des objets tenus.

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony" />
+    <Compile Include="../../Multiplayer/Patches/World/ShopWalletPatch.cs" Link="Production/ShopWalletPatch.cs" />
+  </ItemGroup>
+</Project>

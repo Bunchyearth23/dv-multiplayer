@@ -17,8 +17,11 @@ public readonly struct ShopPurchaseOutcome
 {
     public readonly ShopQuote Quote;
     public readonly bool RecoveryRequired;
-    public ShopPurchaseOutcome(ShopQuote quote, bool recoveryRequired = false)
-    { Quote = quote; RecoveryRequired = recoveryRequired; }
+    public readonly Exception FailureException;
+    public readonly string FailurePhase;
+    public ShopPurchaseOutcome(ShopQuote quote, bool recoveryRequired = false,
+        Exception failureException = null, string failurePhase = null)
+    { Quote = quote; RecoveryRequired = recoveryRequired; FailureException = failureException; FailurePhase = failurePhase; }
 }
 
 /// <summary>Session-scoped idempotency. Retains terminal outcomes rather than evicting replay protection.</summary>
@@ -71,40 +74,58 @@ public sealed class ShopPurchaseLedger
         IShopPurchaseBackend backend = null;
         bool prepareStarted = false;
         bool committed = false;
+        string phase = "create-backend";
         try
         {
             backend = createBackend();
+            phase = "validate";
             var quote = backend.Validate();
             if (quote.Status != ShopQuoteStatus.Success)
                 entry.Outcome = new ShopPurchaseOutcome(quote);
             else
             {
                 prepareStarted = true;
+                phase = "prepare";
                 backend.Prepare();
                 // Preparation may invoke Unity/mod callbacks; check price, funds and stock again.
+                phase = "revalidate";
                 quote = backend.Validate();
                 if (quote.Status != ShopQuoteStatus.Success)
                     entry.Outcome = new ShopPurchaseOutcome(quote);
-                else if (!backend.TryDebit(quote.Total))
+                else if (!TryDebit())
                     entry.Outcome = Failure(ShopQuoteStatus.InsufficientFunds);
                 else
                 {
+                    phase = "commit";
                     backend.Commit();
                     committed = true;
                     entry.Outcome = new ShopPurchaseOutcome(quote);
                 }
+
+                bool TryDebit()
+                {
+                    phase = "debit";
+                    return backend.TryDebit(quote.Total);
+                }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            entry.Outcome = Failure(ShopQuoteStatus.ServerError);
+            entry.Outcome = new ShopPurchaseOutcome(new ShopQuote(ShopQuoteStatus.ServerError),
+                failureException: ex, failurePhase: phase);
         }
         finally
         {
             if (prepareStarted && !committed)
             {
                 try { backend.Rollback(); }
-                catch { entry.Outcome = new ShopPurchaseOutcome(new ShopQuote(ShopQuoteStatus.ServerError), true); }
+                catch (Exception ex)
+                {
+                    var original = entry.Outcome.FailureException;
+                    entry.Outcome = new ShopPurchaseOutcome(new ShopQuote(ShopQuoteStatus.ServerError), true,
+                        original == null ? ex : new AggregateException(original, ex),
+                        original == null ? "rollback" : entry.Outcome.FailurePhase + "+rollback");
+                }
             }
             executing = false;
         }

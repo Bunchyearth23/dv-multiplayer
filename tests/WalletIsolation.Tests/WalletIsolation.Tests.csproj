@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+<PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup>
+<ItemGroup>
+<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+<PackageReference Include="LiteNetLib" Version="1.3.1" />
+<Compile Include="../../Multiplayer/Networking/Data/Wallets/*.cs" Link="Production/%(Filename).cs" />
+<Compile Include="../../Multiplayer/API/ServerAPIProvider.Wallets.cs" Link="Production/ServerAPIProvider.Wallets.cs" />
+<Compile Include="../../Multiplayer/Networking/Managers/Server/NetworkServer.Wallets.cs" Link="Production/NetworkServer.Wallets.cs" />
+<Compile Include="../../Multiplayer/Networking/Managers/Client/NetworkClient.Wallets.cs" Link="Production/NetworkClient.Wallets.cs" />
+<Compile Include="../../Multiplayer/Networking/Packets/Clientbound/SaveGame/ClientboundMoneyPacket.cs" Link="Production/ClientboundMoneyPacket.cs" />
+<Compile Include="../../Multiplayer/Networking/Data/PlayerLoadingState.cs" Link="Production/PlayerLoadingState.cs" />
+<Compile Include="../../MultiplayerAPI/Types/IndividualWalletResult.cs" Link="Production/IndividualWalletResult.cs" />
+<Compile Include="../../MultiplayerAPI/Util/EventDispatch.cs" Link="Production/EventDispatch.cs" />
+<Compile Include="../../Multiplayer/Components/Networking/World/NetworkedCashRegisterWithModules.Wallets.cs" Link="Production/NetworkedCashRegisterWithModules.Wallets.cs" />
+</ItemGroup>
+</Project>

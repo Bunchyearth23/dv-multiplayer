@@ -49,6 +49,7 @@
     <Compile Include="../../Multiplayer/Networking/Data/Items/ItemUpdateData.cs" Link="Production/ItemUpdateData.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/ItemActionPolicy.cs" Link="Production/ItemActionPolicy.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/ShopCartPolicy.cs" Link="Production/ShopCartPolicy.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPaymentPreview.cs" Link="Production/ShopPaymentPreview.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPurchaseLedger.cs" Link="Production/ShopPurchaseLedger.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPurchaseOperation.cs" Link="Production/ShopPurchaseOperation.cs" />
     <Compile Include="../../Multiplayer/Networking/Data/RPCs/ShopPurchaseResponse.cs" Link="Production/ShopPurchaseResponse.cs" />

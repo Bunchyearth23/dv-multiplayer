@@ -1,3 +1,4 @@
+using Multiplayer.Networking.Data.Wallets;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,7 +12,7 @@ using Object = UnityEngine.Object;
 
 namespace Multiplayer.Components.Networking.World;
 
-/// <summary>Stages all Unity objects before charging the shared wallet.</summary>
+/// <summary>Stages all Unity objects before charging the requesting player.</summary>
 public sealed class ShopPurchaseBackend : IShopPurchaseBackend
 {
     private sealed class StagedItem
@@ -46,6 +47,7 @@ public sealed class ShopPurchaseBackend : IShopPurchaseBackend
     public void Prepare()
     {
         shop = GlobalShopController.Instance.globalShopList.First(candidate =>
+            candidate != null && candidate.cashRegister != null &&
             NetworkedCashRegisterWithModules.TryGet(candidate.cashRegister, out var networked) && networked == register);
         if (shop.itemSpawnTransform == null)
             throw new InvalidOperationException("Shop delivery transform is missing.");
@@ -55,7 +57,10 @@ public sealed class ShopPurchaseBackend : IShopPurchaseBackend
         {
             var data = GlobalShopController.Instance.GetShopItemData(ids[line]);
             var prefab = Resources.Load<GameObject>(ids[line]);
-            if (data == null || prefab == null || prefab.GetComponent<ItemBase>() == null ||
+            // Native prefabs carry ControlSpec.Item. Its Awake creates ItemNonVR/ItemVRTK;
+            // ItemBase is therefore absent until the staged clone is activated.
+            if (data == null || prefab == null ||
+                (prefab.GetComponent<DV.CabControls.Spec.Item>() == null && prefab.GetComponent<ItemBase>() == null) ||
                 prefab.GetComponent<InventoryItemSpec>() == null || prefab.GetComponent<ShopRestocker>() == null)
                 throw new InvalidOperationException("Shop item prefab is missing required components: " + ids[line]);
             for (int unit = 0; unit < quantities[line]; unit++)
@@ -71,11 +76,11 @@ public sealed class ShopPurchaseBackend : IShopPurchaseBackend
 
     public bool TryDebit(double total)
     {
-        if (Inventory.Instance.PlayerMoney < total)
+        if (PlayerWallet.Read(player) < total)
             return false;
         // RemoveMoney mutates the wallet before firing MoneyChanged. Account for a throwing subscriber.
         charged = total;
-        if (Inventory.Instance.RemoveMoney(total))
+        if (PlayerWallet.TryDebit(player, total))
             return true;
         charged = 0;
         return false;
@@ -93,6 +98,8 @@ public sealed class ShopPurchaseBackend : IShopPurchaseBackend
             go.transform.rotation = shop.itemSpawnTransform.rotation;
             go.SetActive(true);
             var itemBase = go.GetComponent<ItemBase>();
+            if (itemBase == null || itemBase.InventorySpecs == null)
+                throw new InvalidOperationException("Purchased item did not initialize its runtime controls: " + item.Data.item.ItemPrefabName);
             StorageController.Instance.AddItemToWorldStorage(itemBase);
             go.GetComponent<ShopRestocker>().restockOnItemDestroyed = true;
             if (itemBase.ItemRigidbody != null)
@@ -128,7 +135,7 @@ public sealed class ShopPurchaseBackend : IShopPurchaseBackend
         {
             double refund = charged;
             charged = 0;
-            try { Inventory.Instance.AddMoney(refund); }
+            try { PlayerWallet.Credit(player, refund); }
             catch (Exception ex) { errors.Add(ex); }
         }
         if (errors.Count > 0) throw new AggregateException(errors);

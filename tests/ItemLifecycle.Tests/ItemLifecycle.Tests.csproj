@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="0Harmony" />
+    <Compile Include="../../Multiplayer/Components/Networking/World/NetworkedItemManager.Cache.cs" Link="Production/NetworkedItemManager.Cache.cs" />
+    <Compile Include="../../Multiplayer/Components/Networking/World/NetworkedItem.Interaction.cs" Link="Production/NetworkedItem.Interaction.cs" />
+    <Compile Include="../../Multiplayer/Patches/World/Items/RespawnOnDropPatch.cs" Link="Production/RespawnOnDropPatch.cs" />
+  </ItemGroup>
+</Project>

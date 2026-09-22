@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+<PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><LangVersion>latest</LangVersion><ServerCallbacksSource Condition="'$(ServerCallbacksSource)' == ''">../../Multiplayer/Networking/Managers/Server/NetworkServer.ExternalPackets.cs</ServerCallbacksSource></PropertyGroup>
+<ItemGroup>
+<Compile Include="../../MultiplayerAPI/RollingStockAccess.cs" Link="Production/RollingStockAccess.cs" />
+<Compile Include="../../Multiplayer/Networking/Managers/Server/NetworkServer.RollingStockAccess.cs" Link="Production/NetworkServer.RollingStockAccess.cs" />
+<PackageReference Include="LiteNetLib" Version="1.3.1" />
+<Compile Include="$(ServerCallbacksSource)" Link="Production/NetworkServer.ExternalPackets.cs" />
+<Compile Include="../../Multiplayer/API/ExternalSerializablePacketWrapper.cs" Link="Production/ExternalSerializablePacketWrapper.cs" />
+<Compile Include="../../Multiplayer/Utils/PacketCompression.cs" Link="Production/PacketCompression.cs" />
+<Compile Include="../../MultiplayerAPI/Interfaces/Packets/ISerializablePacket.cs" Link="Production/ISerializablePacket.cs" />
+<Compile Include="../../MultiplayerAPI/Interfaces/Packets/IPacket.cs" Link="Production/IPacket.cs" />
+<Compile Include="../../MultiplayerAPI/Types/PacketHandler.cs" Link="Production/PacketHandler.cs" />
+</ItemGroup>
+</Project>

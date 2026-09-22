@@ -1378,12 +1378,6 @@ public partial class NetworkClient : NetworkManager
         windowsController.RepairWindows();
     }
 
-    private void OnClientboundMoneyPacket(ClientboundMoneyPacket packet)
-    {
-        LogDebug(() => $"Received new money amount ${packet.Amount}");
-        Inventory.Instance.SetMoney(packet.Amount);
-    }
-
     private void OnClientboundLicenseAcquiredPacket(ClientboundLicenseAcquiredPacket packet)
     {
         LogDebug(() => $"Received new {(packet.IsJobLicense ? "job" : "general")} license {packet.Id}");

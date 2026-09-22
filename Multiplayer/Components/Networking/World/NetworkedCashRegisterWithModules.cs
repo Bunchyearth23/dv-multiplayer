@@ -1,3 +1,4 @@
+using Multiplayer.Networking.Data.Wallets;
 using DV.CashRegister;
 using DV.Booklets;
 using DV.Interaction;
@@ -17,7 +18,7 @@ using UnityEngine;
 
 namespace Multiplayer.Components.Networking.World;
 
-public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, NetworkedCashRegisterWithModules>
+public partial class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, NetworkedCashRegisterWithModules>
 {
     #region Lookup Cache
     private static readonly Dictionary<CashRegisterWithModules, NetworkedCashRegisterWithModules> cashRegisterToNetworkedCashRegister = [];
@@ -77,7 +78,9 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
     #endregion
 
     #region Client Variables
-    public bool IsBusy => isBuying || isCancelling || isAddingCash || processingAction;
+    public bool IsBusy => isBuying || isCancelling || isAddingCash || processingAction || shopPayment.IsPending;
+    private readonly ShopPaymentPreview shopPayment = new();
+    public double? ShopPaymentAmount => shopPayment.Amount;
     bool isBuying;
     bool isCancelling;
     bool isAddingCash;
@@ -102,6 +105,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     protected override void OnDestroy()
     {
+        shopPayment.Clear();
         cashRegisterToNetworkedCashRegister.Remove(CashRegister);
 
         if (_cullingManager != null)
@@ -129,7 +133,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
         if (shop == null || shop.scanItemResourceModules == null)
             return new ShopQuote(ShopQuoteStatus.InvalidShop);
 
-        return ShopCartPolicy.Quote(itemIds, quantities, Inventory.Instance.PlayerMoney, id =>
+        return ShopCartPolicy.Quote(itemIds, quantities, PlayerWallet.Read(player), id =>
         {
             var data = controller.GetShopItemData(id);
             if (data == null || data.item == null || data.unavailableDueToGameMode ||
@@ -153,7 +157,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     private void CullingManager_PlayerEnteredActivationRegion(ServerPlayer serverPlayer)
     {
-        if (CashRegister.DepositedCash > 0f)
+        if (!IsShopRegister && CashRegister.DepositedCash > 0f)
         {
             NetworkLifecycle.Instance.Server.SendCashRegisterAction
                 (
@@ -175,7 +179,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
         NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount})");
         if (NetworkLifecycle.Instance.Server.AllowsAction(player, Multiplayer.Settings.AllowClientPurchases) &&
-            CashRegister != null && (!IsShopRegister || packet.Action == CashRegisterAction.Cancel) && transform.PlayerCanReach(player, 1) &&
+            CashRegister != null && !IsShopRegister && CanUseDeposit(player) && transform.PlayerCanReach(player, 1) &&
             (packet.Action == CashRegisterAction.Cancel || packet.Action == CashRegisterAction.Buy || packet.Action == CashRegisterAction.AddCash))
         {
             processingAction = true;
@@ -189,7 +193,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
                 case CashRegisterAction.Buy:
 
-                    Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}) Player Money: {Inventory.Instance.PlayerMoney}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
+                    Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}) Player Money: {PlayerWallet.Read(player)}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
 
                     if (CashRegister.TotalUnitsInBasket() <= 0)
                     {
@@ -204,7 +208,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                         success = CashRegister?.Buy() ?? false;
                     }
 
-                    Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}, {packet.Amount}) Response: {response}, Buy success: {success}, Player Money: {Inventory.Instance.PlayerMoney}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
+                    Multiplayer.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}, {packet.Amount}) Response: {response}, Buy success: {success}, Player Money: {PlayerWallet.Read(player)}, TotalCost: {CashRegister.GetTotalCost()}, TotalUnitsInBasket: {CashRegister.TotalUnitsInBasket()}");
 
                     break;
 
@@ -227,12 +231,15 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                     }
                     else
                     {
-                        double amountToAdd = Math.Min(remainingCost, Inventory.Instance.PlayerMoney);
+                        double amountToAdd = Math.Min(remainingCost, PlayerWallet.Read(player));
 
-                        Inventory.Instance.RemoveMoney(amountToAdd);
+                        if (!PlayerWallet.TryDebit(player, amountToAdd))
+                        { response = CashRegisterAction.RejectFunds; break; }
+                        depositOwner = player;
+                        depositRefundId = Guid.NewGuid();
                         CashRegister.SetCash(CashRegister.DepositedCash + amountToAdd);
 
-                        NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}) Added cash: {amountToAdd}, New DepositedCash: {CashRegister.DepositedCash}, Player Money: {Inventory.Instance.PlayerMoney}");
+                        NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({packet.Action}) Added cash: {amountToAdd}, New DepositedCash: {CashRegister.DepositedCash}, Player Money: {PlayerWallet.Read(player)}");
                         packet.Action = CashRegisterAction.SetFunds;
                         packet.Amount = CashRegister.DepositedCash;
                         success = true;
@@ -241,7 +248,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
                     break;
 
                 case CashRegisterAction.SetFunds:
-                    //NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount}) Wallet: {Inventory.Instance.PlayerMoney}");
+                    //NetworkLifecycle.Instance.Server?.LogDebug(() => $"NetworkedCashRegisterWithModules.Server_ProcessAction({player.Username}, {packet.Action}, {packet.Amount}) Wallet: {PlayerWallet.Read(player)}");
                     break;
             }
         }
@@ -271,6 +278,54 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     #region Client
 
+    public void ClearShopPayment()
+    {
+        shopPayment.Clear();
+        if (CashRegister != null) CashRegister.OnDepositedUpdated();
+    }
+
+    /// <summary>Presenting a wallet requests a quote, without spending/refunding local money.</summary>
+    public bool PresentShopWallet()
+    {
+        if (!IsShopRegister || IsBusy || CashRegister == null || !CashRegister.isActiveAndEnabled ||
+            CashRegister.IsProcessingTransaction || CashRegister.TotalUnitsInBasket() <= 0 ||
+            PendingShopPurchase != null)
+            return false;
+        if (shopPayment.Amount.HasValue) return true;
+        uint request = shopPayment.Begin();
+        try
+        {
+            RequestShopQuote(response =>
+            {
+                if (this == null || CashRegister == null || !CashRegister.isActiveAndEnabled ||
+                    !shopPayment.Complete(request, response.Status, response.Total)) return;
+                CashRegister.OnDepositedUpdated();
+                if (shopPayment.Amount.HasValue)
+                    CashRegister.addCashAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f,
+                        default, null, CashRegister.transform, false, 0f, null);
+                else
+                {
+                    CashRegister.notEnoughMoneyAudio?.Play(CashRegister.transform.position, 1f, 1f, 0f, 1f, 500f,
+                        default, null, CashRegister.transform, false, 0f, null);
+                    Multiplayer.LogWarning($"Shop wallet rejected: {response.Status}, line {response.FailedLine}.");
+                }
+            }, () =>
+            {
+                if (this == null || CashRegister == null ||
+                    !shopPayment.Complete(request, ShopQuoteStatus.NotReady, 0)) return;
+                CashRegister.OnDepositedUpdated();
+                Multiplayer.LogWarning("Shop wallet quote timed out; present the wallet again.");
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            shopPayment.Complete(request, ShopQuoteStatus.ServerError, 0);
+            Multiplayer.LogError("Unable to present shop wallet: " + ex);
+            return false;
+        }
+    }
+
     /// <summary>Snapshots the local basket and requests an authoritative, non-binding quote.</summary>
     public RpcTicket RequestShopQuote(Action<ShopQuoteResponse> onResponse, Action onTimeout)
     {
@@ -285,6 +340,8 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
             {
                 if (response is ShopQuoteResponse quote && quote.RegisterNetId == NetId)
                     onResponse?.Invoke(quote);
+                else
+                    onTimeout?.Invoke();
             })
             .OnTimeout(onTimeout);
         client.SendShopQuoteRequest(ticket.TicketId, NetId, itemIds, quantities);
@@ -385,6 +442,7 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
         if (!IsShopRegister || IsBusy || NetworkLifecycle.Instance.IsProcessingPacket)
             yield break;
 
+        ClearShopPayment();
         DisableInteraction();
         CashRegister.IsProcessingTransaction = true;
         isBuying = true;
@@ -465,6 +523,8 @@ public class NetworkedCashRegisterWithModules : IdMonoBehaviour<ushort, Networke
 
     public void Client_ProcessCashRegisterAction(CashRegisterAction action, double amount)
     {
+        // Shop baskets and wallet previews are local; purchases use the correlated RPC.
+        if (IsShopRegister) return;
         NetworkLifecycle.Instance.Client?.LogDebug(() => $"NetworkedCashRegisterWithModules.Client_ProcessCashRegisterAction({action}, {amount}) isBuying: {isBuying}, isCancelling: {isCancelling}");
         switch (action)
         {

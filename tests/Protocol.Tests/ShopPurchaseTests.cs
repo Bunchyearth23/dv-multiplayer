@@ -78,7 +78,9 @@ internal static class ShopPurchaseTests
         var ledger = new ShopPurchaseLedger(); var backend = new Backend { Fail = "prepare" }; string id = Operation();
         var result = Buy(ledger, id, backend);
         Check(result.Quote.Status == ShopQuoteStatus.ServerError && backend.Debits == 0 && backend.Objects == 0, "Prepare failure leaked state");
-        Buy(ledger, id, backend);
+        Check(result.FailurePhase == "prepare" && result.FailureException?.Message == "Failed prefab", "Prepare diagnostic lost");
+        var replay = Buy(ledger, id, backend);
+        Check(ReferenceEquals(replay.FailureException, result.FailureException), "Replay lost original diagnostic");
         Check(backend.Prepares == 1 && backend.Rollbacks == 1, "Failed operation repeated");
     }
 
@@ -90,6 +92,8 @@ internal static class ShopPurchaseTests
             var result = Buy(new ShopPurchaseLedger(), Operation(), backend);
             Check(result.Quote.Status != ShopQuoteStatus.Success && !result.RecoveryRequired, "Failed transaction succeeded");
             Check(backend.Wallet == 100 && backend.Stock == 1 && backend.Objects == 0 && backend.Rollbacks == 1, "Compensation incomplete");
+            if (failure != "funds")
+                Check(result.FailurePhase == failure && result.FailureException != null, "Transaction failure phase lost");
         }
     }
 
@@ -107,6 +111,7 @@ internal static class ShopPurchaseTests
         backend.DuringPrepare = () => backend.Stock = 0;
         string id = Operation(); var result = Buy(ledger, id, backend);
         Check(result.RecoveryRequired && result.Quote.Status == ShopQuoteStatus.ServerError, "Recovery failure hidden from first caller");
+        Check(result.FailurePhase == "rollback" && result.FailureException?.Message == "Failed compensation", "Recovery diagnostic lost");
         Check(Buy(ledger, id, backend).RecoveryRequired && backend.Rollbacks == 1, "Recovery failure not retained");
     }
 

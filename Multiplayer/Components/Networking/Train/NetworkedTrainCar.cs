@@ -1060,6 +1060,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
             !ServerActionPolicy.CouplerFlags(packet.Flags, out var remote)) return false;
         var owner = packet.IsFrontCoupler ? frontInteractionPlayer : rearInteractionPlayer;
         bool releasing = packet.Flags == 0 && owner == player;
+        if (!releasing && !NetworkLifecycle.Instance.Server.CanUseRollingStock(player, TrainCar)) return false;
         if (!releasing && !NetworkLifecycle.Instance.Server.AllowsAction(player,
             Multiplayer.Settings.AllowClientCoupling && (!remote || Multiplayer.Settings.AllowClientRemoteCoupling))) return false;
         var coupler = packet.IsFrontCoupler ? TrainCar.frontCoupler : TrainCar.rearCoupler;
@@ -1071,6 +1072,7 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
         if (packet.OtherNetId != 0)
         {
             if (packet.OtherNetId == NetId || !TryGet(packet.OtherNetId, out NetworkedTrainCar otherCar) || otherCar?.TrainCar == null) return false;
+            if (!releasing && !NetworkLifecycle.Instance.Server.CanUseRollingStock(player, otherCar.TrainCar)) return false;
             var other = packet.IsFrontOtherCoupler ? otherCar.TrainCar.frontCoupler : otherCar.TrainCar.rearCoupler;
             if (other == null || !ServerActionPolicy.InRange((coupler.transform.position - other.transform.position).sqrMagnitude, 5f)) return false;
             var otherOwner = packet.IsFrontOtherCoupler ? otherCar.frontInteractionPlayer : otherCar.rearInteractionPlayer;
@@ -1121,6 +1123,11 @@ public class NetworkedTrainCar : IdMonoBehaviour<ushort, NetworkedTrainCar>
 
     public void Server_ReceiveAuthorityRequest(uint portNetId, ServerPlayer player, bool requestAuthority)
     {
+        if (requestAuthority && !NetworkLifecycle.Instance.Server.CanUseRollingStock(player, TrainCar))
+        {
+            NetworkLifecycle.Instance.Server.SendTrainControlAuthorityUpdate(NetId, portNetId, ControlAuthorityState.Denied, player);
+            return;
+        }
         var portId = GetPort(portNetId);
         if (!hasSimFlow || !simulationFlow.TryGetPort(portId, out Port port) || port.valueType != PortValueType.CONTROL)
         {

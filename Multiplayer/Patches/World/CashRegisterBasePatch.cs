@@ -37,6 +37,7 @@ public class CashRegisterBasePatch
             // Money objects are spent before AddCash is called, so return that value to
             // the wallet immediately and never create a second deposited balance.
             Inventory.Instance.AddMoney(amount);
+            netCashRegister.PresentShopWallet();
             return false;
         }
 

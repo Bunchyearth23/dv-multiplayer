@@ -4,6 +4,9 @@ param(
     [string]$ConfigPath
 )
 
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'WindowsCommandLine.ps1')
+
 $configFile = Resolve-Path -LiteralPath $ConfigPath -ErrorAction Stop
 $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
 
@@ -36,5 +39,6 @@ if (![string]::IsNullOrWhiteSpace($config.logPath)) {
     $arguments += $logPath
 }
 
-$process = Start-Process -FilePath $gamePath -ArgumentList $arguments -PassThru -WindowStyle Hidden
+$commandLine = ($arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) }) -join ' '
+$process = Start-Process -FilePath $gamePath -ArgumentList $commandLine -PassThru -WindowStyle Hidden
 [pscustomobject]@{ ProcessId = $process.Id; LogPath = $config.logPath; GamePath = $gamePath }

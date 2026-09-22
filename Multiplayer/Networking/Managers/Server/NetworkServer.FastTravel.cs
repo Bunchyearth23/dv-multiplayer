@@ -1,3 +1,4 @@
+using Multiplayer.Networking.Data.Wallets;
 using System;
 using System.Collections;
 using System.Linq;
@@ -69,7 +70,7 @@ public partial class NetworkServer
         if (!quote.CanTravelWithLoco || quote.isTutorialInProgress || quote.fastTravelWithLocoPrice < 0 ||
             cars.Any(c => c == null || c.derailed || c.IsTeleporting || !c.isStationary) ||
             !TrainCompositionPolicy.IsValid(cars.Select(c => c.GetNetId()).ToArray()) ||
-            !Inventory.Instance.RemoveMoney(quote.fastTravelWithLocoPrice))
+            !PlayerWallet.TryDebit(player, quote.fastTravelWithLocoPrice))
         {
             ReplyFastTravel(player, operation.Id, operation.CarId, 0);
             return;
@@ -127,7 +128,7 @@ public partial class NetworkServer
                     // Native code can detach links before failing. Never replay an uncertain operation.
                     operation.Status = 3;
                     if (!moved && cars.All(c => c != null) && cars.Select((c, i) => (c.transform.position - WorldMover.currentMove - before[i]).sqrMagnitude < 1f).All(v => v))
-                        Inventory.Instance.AddMoney(quote.fastTravelWithLocoPrice);
+                        PlayerWallet.Credit(player, quote.fastTravelWithLocoPrice);
                     ReplyFastTravel(player, operation.Id, operation.CarId, 3);
                 }
                 }

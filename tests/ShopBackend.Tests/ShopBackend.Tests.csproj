@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Multiplayer/Components/Networking/World/ShopPurchaseBackend.cs" Link="Production/ShopPurchaseBackend.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopPurchaseLedger.cs" Link="Production/ShopPurchaseLedger.cs" />
+    <Compile Include="../../Multiplayer/Networking/Data/Items/ShopCartPolicy.cs" Link="Production/ShopCartPolicy.cs" />
+  </ItemGroup>
+</Project>

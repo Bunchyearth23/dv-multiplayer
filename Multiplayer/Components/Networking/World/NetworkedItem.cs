@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace Multiplayer.Components.Networking.World;
 
-public class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
+public partial class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
 {
     #region Lookup Cache
     private static readonly Dictionary<ItemBase, NetworkedItem> itemBaseToNetworkedItem = new(4096);
@@ -152,6 +152,8 @@ public class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
         // Mark registration as complete for items that don't need tracked values
         if (!registrationComplete && !UsefulItem)
             FinaliseTrackedValues();
+
+        NetworkedItemManager.Instance.OnItemStarted(this);
     }
 
     public T GetTrackedItem<T>() where T : Component
@@ -692,8 +694,7 @@ public class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
                 player.RemoveOwnedItem(NetId);
 
         ReleasePresentation();
-        if (Item.IsGrabbed() || Inventory.Instance.Contains(gameObject, false))
-            Inventory.Instance.DropItemFromHandsOrInventory(gameObject);
+        ReleaseLocalInteraction();
         grabHandler?.TogglePhysics(true);
         //activate and relocate item
         transform.SetParent(WorldMover.OriginShiftParent, true);
@@ -745,8 +746,7 @@ public class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
 
         //Attempt attachment to car
         ReleasePresentation();
-        if (Item.IsGrabbed() || Inventory.Instance.Contains(gameObject, false))
-            Inventory.Instance.DropItemFromHandsOrInventory(gameObject);
+        ReleaseLocalInteraction();
         Item.ItemRigidbody.isKinematic = false;
         if (!snapPoint.SnapItem(Item, false))
         {
@@ -789,8 +789,7 @@ public class NetworkedItem : IdMonoBehaviour<ushort, NetworkedItem>
             }
             return;
         }
-        if (Item.IsGrabbed() || Inventory.Instance.Contains(gameObject, false))
-            Inventory.Instance.DropItemFromHandsOrInventory(gameObject);
+        ReleaseLocalInteraction();
         StorageController.Instance.RemoveItemFromStorageItemList(Item);
         lastState = snapshot.ItemState;
         RefreshRemotePresentation();

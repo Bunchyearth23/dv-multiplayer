@@ -257,27 +257,6 @@ public partial class NetworkServer : NetworkManager
         netPacketProcessor.SubscribeNetSerializable<CommonItemChangePacket, ITransportPeer>(OnCommonItemChangePacket);
     }
 
-    //allow mods to register their own packets
-    public void RegisterExternalPacket<T>(ServerPacketHandler<T> handler) where T : class, IPacket, new()
-    {
-        netPacketProcessor.SubscribeReusable<T, ITransportPeer>((packet, peer) =>
-        {
-            var serverPlayer = TryGetServerPlayer(peer, out var player) ? GetWrapper(player) : null;
-            handler(packet, serverPlayer);
-        });
-    }
-
-    public void RegisterExternalSerializablePacket<T>(ServerPacketHandler<T> handler) where T : class, ISerializablePacket, new()
-    {
-        netPacketProcessor.SubscribeNetSerializable<ExternalSerializablePacketWrapper<T>, ITransportPeer>((wrapper, peer) =>
-        {
-            var serverPlayer = TryGetServerPlayer(peer, out var player) ? new ServerPlayerWrapper(player) : null;
-            handler(wrapper.Packet, serverPlayer);
-        },
-        () => new ExternalSerializablePacketWrapper<T>()
-        );
-    }
-
     private void OnLoaded()
     {
         if (!IsSinglePlayer)
@@ -332,16 +311,6 @@ public partial class NetworkServer : NetworkManager
     public bool TryGetServerPlayer(byte playerId, out ServerPlayer player)
     {
         return serverPlayers.TryGetValue(playerId, out player);
-    }
-
-    public ServerPlayerWrapper GetWrapper(ServerPlayer serverPlayer)
-    {
-        if (!PlayerWrapperCache.TryGetValue(serverPlayer.PlayerId, out var wrapper))
-        {
-            wrapper = new ServerPlayerWrapper(serverPlayer);
-            PlayerWrapperCache[serverPlayer.PlayerId] = wrapper;
-        }
-        return wrapper;
     }
 
     #region Net Events
@@ -818,20 +787,6 @@ public partial class NetworkServer : NetworkManager
         );
     }
 
-    public void SendMoney(float amount)
-    {
-        SendPacketToAll
-        (
-            new ClientboundMoneyPacket
-            {
-                Amount = amount
-            },
-            DeliveryMethod.ReliableUnordered,
-            PlayerLoadingState.ReadyForWorldState,
-            excludeSelf: true
-        );
-    }
-
     public void SendLicense(string id, bool isJobLicense)
     {
         SendPacketToAll
@@ -1156,6 +1111,12 @@ public partial class NetworkServer : NetworkManager
         }
 
         Log($"Processing login packet for {packet.Username} ({guid}){remote}");
+        if (ServerPlayers.Any(existing => existing.Guid == guid))
+        {
+            LogWarning("Rejected a second connection using an already connected persistent player identity.");
+            request.Reject();
+            return;
+        }
 
         if (Multiplayer.Settings.Password != packet.Password)
         {
@@ -1735,46 +1696,55 @@ public partial class NetworkServer : NetworkManager
 
     private void OnCommonTrainUncouplePacket(CommonTrainUncouplePacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonHoseConnectedPacket(CommonHoseConnectedPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId, packet.OtherNetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonHoseDisconnectedPacket(CommonHoseDisconnectedPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonMuConnectedPacket(CommonMuConnectedPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId, packet.OtherNetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonMuDisconnectedPacket(CommonMuDisconnectedPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonCockFiddlePacket(CommonCockFiddlePacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonBrakeCylinderReleasePacket(CommonBrakeCylinderReleasePacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonHandbrakePositionPacket(CommonHandbrakePositionPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         SendPacketToAll(packet, DeliveryMethod.ReliableOrdered, PlayerLoadingState.ReadyForTrainSets, peer);
     }
 
     private void OnCommonPaintThemePacket(CommonPaintThemePacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player) ||
             !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
             packet.TargetArea != TrainCarPaint.Target.Interior && packet.TargetArea != TrainCarPaint.Target.Exterior)
@@ -1803,6 +1773,7 @@ public partial class NetworkServer : NetworkManager
 
     private void OnServerboundAddCoalPacket(ServerboundAddCoalPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
 
@@ -1823,6 +1794,7 @@ public partial class NetworkServer : NetworkManager
 
     private void OnServerboundTenderCoalPacket(ServerboundTenderCoalPacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
 
@@ -1843,6 +1815,7 @@ public partial class NetworkServer : NetworkManager
 
     private void OnServerboundFireboxIgnitePacket(ServerboundFireboxIgnitePacket packet, ITransportPeer peer)
     {
+        if (!CanUseRollingStock(peer, packet.NetId)) return;
         if (!TryGetServerPlayer(peer, out ServerPlayer player))
             return;
 
@@ -1863,6 +1836,8 @@ public partial class NetworkServer : NetworkManager
             return;
         if (!NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
+        if (!CanUseRollingStock(player, networkedTrainCar.TrainCar))
+        { networkedTrainCar.Common_DirtyPorts(packet.PortIds ?? System.Array.Empty<uint>()); RejectAction(peer, "Train control", "Company membership required."); return; }
         if (packet.PortIds == null || packet.PortValues == null ||
             !ServerActionPolicy.ParallelPayload(packet.PortIds.Length, packet.PortValues.Length) ||
             packet.PortValues.Any(value => !ServerActionPolicy.Finite(value)))
@@ -1902,6 +1877,8 @@ public partial class NetworkServer : NetworkManager
             !AllowsAction(player, Multiplayer.Settings.AllowClientService) ||
             !NetworkedTrainCar.TryGet(packet.NetId, out NetworkedTrainCar networkedTrainCar))
             return;
+        if (!CanUseRollingStock(player, networkedTrainCar.TrainCar))
+        { networkedTrainCar.Common_DirtyFuses(packet.FuseIds ?? System.Array.Empty<uint>()); RejectAction(peer, "Train fuse", "Company membership required."); return; }
         if (packet.FuseIds == null || packet.FuseValues == null ||
             !ServerActionPolicy.ParallelPayload(packet.FuseIds.Length, packet.FuseValues.Length) ||
             !NetworkLifecycle.Instance.IsHost(player) && !networkedTrainCar.Server_ValidateClientFusesPacket(player, packet))
@@ -1952,7 +1929,7 @@ public partial class NetworkServer : NetworkManager
 
         TrainCar trainCar = networkedTrainCar.TrainCar;
         float cost = trainCar.playerSpawnedCar ? 0.0f : Mathf.RoundToInt(Globals.G.GameParams.DeleteCarMaxPrice);
-        if (!Inventory.Instance.RemoveMoney(cost))
+        if (!global::Multiplayer.Networking.Data.Wallets.PlayerWallet.TryDebit(player, cost))
         {
             LogWarning($"{player.Username} tried to delete a train without enough money to do so!");
             return;
@@ -2022,7 +1999,7 @@ public partial class NetworkServer : NetworkManager
         float cost = TutorialHelper.InRestrictedMode || rerailController != null && rerailController.isPlayerNewbie ? 0f :
             RerailController.CalculatePrice((networkedTrainCar.transform.position - position).magnitude, trainCar.carType, Globals.G.GameParams.RerailMaxPrice);
 
-        if (!Inventory.Instance.RemoveMoney(cost))
+        if (!global::Multiplayer.Networking.Data.Wallets.PlayerWallet.TryDebit(player, cost))
         {
             LogWarning($"{player.Username} tried to rerail a train without enough money to do so!");
             return;
@@ -2200,7 +2177,7 @@ public partial class NetworkServer : NetworkManager
             try
             {
                 chargedPrice = price; // RemoveMoney mutates before its event callbacks.
-                if (!Inventory.Instance.RemoveMoney(price))
+                if (!global::Multiplayer.Networking.Data.Wallets.PlayerWallet.TryDebit(player, price))
                 {
                     chargedPrice = 0;
                     LogWarning($"{player.Username} tried to request a work train without enough money to do so!");
@@ -2211,7 +2188,7 @@ public partial class NetworkServer : NetworkManager
             catch (Exception ex)
             {
                 LogError($"Work train debit failed for {player.Username}: {ex}");
-                try { if (chargedPrice > 0) Inventory.Instance.AddMoney(chargedPrice); }
+                try { if (chargedPrice > 0) global::Multiplayer.Networking.Data.Wallets.PlayerWallet.Credit(player, chargedPrice); }
                 catch (Exception refundError) { LogError($"Work train debit compensation failed for {player.Username}: {refundError}"); }
                 Respond(SpawnResponse.ResponseType.ServerError);
                 return;
@@ -2238,7 +2215,7 @@ public partial class NetworkServer : NetworkManager
             LogError($"Work train request failed for {player.Username}: {ex}");
             if (chargedPrice > 0)
             {
-                try { Inventory.Instance.AddMoney(chargedPrice); }
+                try { global::Multiplayer.Networking.Data.Wallets.PlayerWallet.Credit(player, chargedPrice); }
                 catch (Exception refundError)
                 {
                     LogError($"Work train refund failed for {player.Username}: {refundError}");
@@ -2280,7 +2257,7 @@ public partial class NetworkServer : NetworkManager
         }
         catch (Exception ex)
         {
-            LogWarning($"Shop quote failed for register {packet.RegisterNetId}: {ex.Message}");
+            LogError($"Shop quote failed for register {packet.RegisterNetId}: {ex}");
             quote = new ShopQuote(ShopQuoteStatus.ServerError);
         }
 
@@ -2318,6 +2295,8 @@ public partial class NetworkServer : NetworkManager
             {
                 if (outcome.RecoveryRequired)
                     LogError($"Shop purchase {packet.OperationId} requires recovery after failed compensation.");
+                if (outcome.FailureException != null)
+                    LogError($"Shop purchase {packet.OperationId}, register={packet.RegisterNetId}, phase={outcome.FailurePhase}, items=[{string.Join(",", packet.ItemIds)}] failed: {outcome.FailureException}");
                 SendRpcResponse(packet.TicketId, new ShopPurchaseResponse
                 {
                     RegisterNetId = packet.RegisterNetId, OperationId = packet.OperationId,
@@ -2415,7 +2394,7 @@ public partial class NetworkServer : NetworkManager
         try
         {
             debited = true; // RemoveMoney mutates before MoneyChanged callbacks.
-            if (!Inventory.Instance.RemoveMoney(price.Value))
+            if (!global::Multiplayer.Networking.Data.Wallets.PlayerWallet.TryDebit(player, price.Value))
             {
                 debited = false;
                 LogWarning($"{player.Username} tried to purchase a {(packet.IsJobLicense ? "job" : "general")} license with id {packet.Id} without enough money to do so!");
@@ -2435,7 +2414,7 @@ public partial class NetworkServer : NetworkManager
                 : LicenseManager.Instance.IsGeneralLicenseAcquired(generalLicense);
             if (!acquired && debited)
             {
-                try { Inventory.Instance.AddMoney(price.Value); }
+                try { global::Multiplayer.Networking.Data.Wallets.PlayerWallet.Credit(player, price.Value); }
                 catch (Exception refundError) { LogError($"License refund failed for {player.Username}: {refundError}"); }
             }
             if (!acquired)
@@ -2555,7 +2534,7 @@ public partial class NetworkServer : NetworkManager
             return;
         }
 
-        try { targetWarehouse.ServerProcessWarehouseAction(packet.WarehouseAction); }
+        try { using (MPAPI.RollingStockAccess.ForActor(GetWrapper(player))) targetWarehouse.ServerProcessWarehouseAction(packet.WarehouseAction); }
         catch (Exception ex)
         {
             LogError($"Warehouse action failed: {ex}");

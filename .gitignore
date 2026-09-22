@@ -310,9 +310,13 @@ MultiplayerAssets/ProjectSettings/*
 *.pem
 /docs/*
 !/docs/INDEX.md
+!/docs/SHOP-RUNTIME-2026-09-18.md
 /build-validation.log
 /.tools/
 /.install-source-*/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+!/docs/ITEM-LIFECYCLE-2026-09-20.md
+!/docs/F7-REMOTE-IDENTITY-2026-09-20.md
+!/docs/INDIVIDUAL-WALLETS-2026-09-20.md

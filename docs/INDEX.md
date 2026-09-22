@@ -1,5 +1,9 @@
 # État du multijoueur
 
+20 septembre : diffusion du portefeuille hôte supprimée ; chargement, soldes et dépenses invités raccordés aux comptes personnels. Protocole 5, déploiement hôte/invités coordonné requis. Validation canonique et 24 nouveaux contrôles d'isolation réussis ; non déployé, qualification Unity restante. [Rapport](INDIVIDUAL-WALLETS-2026-09-20.md). États W inchangés.
+
+20 septembre : permissions de compagnie contrôlées sur le serveur avant conduite/manipulations ; 19 nouvelles régressions d'autorité réussies. Livrer API/Multiplayer et BDVM ensemble. [Rapport](../../dv-company/docs/COMPANY-ROLLING-STOCK-ACCESS-2026-09-20.md). Non déployé, essais Unity restants ; états W inchangés.
+
 2026-09-14 : overflow réseau remplacé par un refus avec reconnexion, file bornée en nombre/octets/âge, budget d'application partagé client/serveur et lectures de positions d'objets mutualisées par tick. `tools/Validate.ps1` passe avec 150 tests, 0 échec. Build Release déployé dans `unity-candidate-20260914-main-thread` ; comparaison officielle globale : 95 SAME, réglages préservés. Cadence physique conservée ; surcharge/late join et coûts cumulés à qualifier en jeu. [Corrections, preuves de déploiement et limites](../../dv-company/docs/UNITY-MAIN-THREAD-CORRECTIONS-2026-09-14.md). États W inchangés.
 
 Audit du 6 septembre 2026, sur les sources locales. Cet index constitue le point d'entrée pour savoir ce qu'il reste à faire. Il n'existait pas avant cet audit.
@@ -52,6 +56,8 @@ Ces tâches sont les unités d'exécution des chantiers W-001 à W-006, pas de n
 
 ### W-020 — Serveur dédié pour décharger la boucle du joueur
 
+Reprise demandée le 18 septembre 2026. Premier lot : arguments du lanceur Windows préservés (espaces, guillemets, chemins, Unicode) avec preuve par processus enfant, intégrée à `tools/Validate.ps1`. Validation actuelle : 154 tests protocole, 11 contrôles wallet, suite backend et six builds sans avertissement. Prochaine preuve : bootstrap Unity sur une sauvegarde de qualification, puis zéro joueur/save/restart ; voir [DEDICATED-SERVER.md](DEDICATED-SERVER.md).
+
 État : `building` ; priorité proposée : P1. Lancé sur instruction utilisateur le 12 septembre 2026 pour sortir l'hébergement du processus du joueur. Reprend I-002 ; dépendances : W-009/W-010, W-015, W-016. Un « terminé » exige désormais un lancement externe sans clic ni menu, une sauvegarde désignée chargée sans joueur local, un arrêt/sauvegarde/reprise vérifiés et une campagne de deux clients distants ; une simple case dans le jeu ou un serveur loopback ne satisfait pas ce chantier. Découpage et preuves : [DEDICATED-SERVER.md](DEDICATED-SERVER.md).
 - [ ] W-020.1 Mesurer le coût de l'hébergement actuel (frame time p95/p99, tick serveur, CPU, mémoire, queues) sur une sauvegarde et une charge reproductibles ; inventorier les dépendances serveur au client local, à Unity, au streaming, à la physique et à Steam.
 - [ ] W-020.2 Choisir et documenter le runtime viable : processus de jeu sans rendu si supporté, ou extraction d'un cœur serveur ; définir les frontières simulation/réseau et les appels devant rester sur le thread Unity. Un déplacement arbitraire de la simulation vers un thread secondaire ne constitue pas la solution.
@@ -72,7 +78,13 @@ Prochaine étape de W-001 : valider en session réelle la transaction, la livrai
 
 NetworkedCashRegisterWithModules collecte le panier local et le bouton shop lance désormais RequestShopPurchase pour le host comme pour les clients. Le résultat ne vide le panier qu’après un succès autoritaire ; timeout et OperationInProgress conservent le même OperationId pour un retry. Les objets sont créés au spawn du shop par le serveur puis diffusés via les handlers items. Les effets Unity, le receipt et la présentation du feedback doivent encore être validés en jeu.
 
+Correction X-001 du 20 septembre : doublons et blocage des interactions signalés sur le client au station office. Cache conservant le composant natif RespawnOnDrop, libération des prises avant retrait autoritaire, filtrage des objets locaux essentiels non possédés et des objets chargés tardivement. Validation canonique réussie : 154 tests protocole, 11 contrôles Harmony shop, fixture backend et 17 contrôles du cycle des objets. Non déployé ; confirmation Unity host/client/VR et logs client encore nécessaires. Voir [diagnostic et qualification](ITEM-LIFECYCLE-2026-09-20.md). X-001 reste ouvert.
+
+Correction F7 distant du 20 septembre : l'hôte rejetait les demandes `state.get` comme `unknown-peer`, car les paquets sérialisables construisaient un wrapper joueur distinct de celui du serveur. Callback raccordé à `GetWrapper`, contrôles d'identité BDVM conservés. Échec avant correction reproduit ; 8 contrôles ciblés et validation canonique complète réussis, y compris le correctif X-001 des objets. Non déployé ; qualification F7 avec invité/reconnexion encore ouverte. [Preuves](F7-REMOTE-IDENTITY-2026-09-20.md).
+
 ## Base existante
+
+Correction W-001 du 18 septembre : portefeuille/shop signalé en solo, attendu aussi en multijoueur ; douze `ServerError` observés. Insertion du portefeuille raccordée au devis serveur avec affichage local sans faux dépôt ; achat à débit unique conservé. Préparation des articles corrigée : ItemBase est créé à l'activation depuis la spécification native, pas exigé sur le prefab. Ancien backend en échec reproduit, nouveau backend vert. Validation canonique : 154 tests + 11 contrôles Harmony et fixture backend réussis. Candidat `unity-candidate-20260918-shop-wallet-r1` installé, 95/95 SAME, réglages conservés, backup `activation-20260918-085609`. Qualification Unity host/client/VR encore ouverte. Voir [preuves et parcours à qualifier](SHOP-RUNTIME-2026-09-18.md).
 
 Architecture host/client, transport Steamworks actif et implémentation LiteNetLib présente ; synchronisation des trains et bogies, commandes avec authority, attelages, jobs, météo, heure, argent et licences ; chargement initial par étapes ; API de compatibilité des mods et chat. Il faut consolider ces parcours et terminer les portions désactivées.
 

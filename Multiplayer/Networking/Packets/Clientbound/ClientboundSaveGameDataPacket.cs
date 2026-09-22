@@ -72,7 +72,7 @@ public class ClientboundSaveGameDataPacket
         {
             GameMode = data.GetString(SaveGameKeys.Game_mode),
             SerializedDifficulty = difficulty.ToString(Formatting.None),
-            Money = StartingItemsController.Instance == null || !StartingItemsController.Instance.itemsLoaded ? data.GetFloat(SaveGameKeys.Player_money).GetValueOrDefault(0) : (float)Inventory.Instance.PlayerMoney,
+            Money = (float)global::Multiplayer.Networking.Data.Wallets.PlayerWallet.Read(player),
             AcquiredGeneralLicenses = data.GetStringArray(SaveGameKeys.Licenses_General),
             AcquiredJobLicenses = data.GetStringArray(SaveGameKeys.Licenses_Jobs),
             UnlockedGarages = data.GetStringArray(SaveGameKeys.Garages),
