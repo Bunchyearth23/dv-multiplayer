@@ -53,6 +53,23 @@ internal static class StartingInventoryGrantsTests
         Check(JToken.DeepEquals(prepared, StartingInventoryGrants.Prepare(prepared, catalog, 3)));
     }
 
+    public static void SteamToolsUseBackpackAndExistingHotbarGrantsMove()
+    {
+        var catalog = StartingInventoryGrants.CreateSteamOperatingItems();
+        var prepared = StartingInventoryGrants.Prepare(null, catalog, 36);
+        var items = PlayerInventorySaveCodec.Read(prepared);
+        Check(items.Length == 3 && items[0].InventorySlotIndex == 12 &&
+            items[1].InventorySlotIndex == 13 && items[2].InventorySlotIndex == 14);
+        Check(JToken.DeepEquals(prepared, StartingInventoryGrants.Prepare(prepared, catalog, 36)));
+
+        for (int i = 0; i < items.Length; i++) items[i].InventorySlotIndex = i;
+        var oldProfile = new JObject();
+        PlayerInventorySaveCodec.Write(oldProfile, items);
+        var migrated = PlayerInventorySaveCodec.Read(StartingInventoryGrants.Prepare(oldProfile, catalog, 36));
+        Check(migrated[0].InventorySlotIndex >= 12 && migrated[1].InventorySlotIndex >= 12 &&
+            migrated[2].InventorySlotIndex >= 12);
+    }
+
     public static void InvalidLedgerAndCatalogPreserveProfile()
     {
         var profile = StartingInventoryGrants.Prepare(null, new[] { Item("radio") }, 1);

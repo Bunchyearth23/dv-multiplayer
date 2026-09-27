@@ -1,5 +1,9 @@
 # État du multijoueur
 
+27 septembre : les outils vapeur restent dans le sac à dos (slots 12–35) ; les anciennes attributions en hotbar sont déplacées lors de la préparation du profil. Validation canonique : 155 tests, dont la migration des trois outils. Candidat `unity-candidate-20260927-backpack-inventory-r1` activé jeu fermé ; comparaison officielle après installation : 95 SAME. Sauvegarde : `dv-company/artifacts/unity-candidates/unity-candidate-20260927-backpack-inventory-r1/backups/activation-20260927-163222`. Le parcours d’inventaire reste à confirmer en jeu.
+
+23 septembre : chaque profil joueur préparé par l’hôte reçoit aussi une pelle, un briquet et une burette d’huile pour l’usage des locomotives vapeur ; le registre d’attribution prévient les doublons. Changement de code uniquement, parcours de démarrage/restauration à confirmer en Unity.
+
 20 septembre : diffusion du portefeuille hôte supprimée ; chargement, soldes et dépenses invités raccordés aux comptes personnels. Protocole 5, déploiement hôte/invités coordonné requis. Validation canonique et 24 nouveaux contrôles d'isolation réussis ; non déployé, qualification Unity restante. [Rapport](INDIVIDUAL-WALLETS-2026-09-20.md). États W inchangés.
 
 20 septembre : permissions de compagnie contrôlées sur le serveur avant conduite/manipulations ; 19 nouvelles régressions d'autorité réussies. Livrer API/Multiplayer et BDVM ensemble. [Rapport](../../dv-company/docs/COMPANY-ROLLING-STOCK-ACCESS-2026-09-20.md). Non déployé, essais Unity restants ; états W inchangés.

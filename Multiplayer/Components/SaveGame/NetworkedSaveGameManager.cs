@@ -135,6 +135,7 @@ public class NetworkedSaveGameManager : SingletonBehaviour<NetworkedSaveGameMana
                 InventorySlotIndex = item.preferredRelativeSlot - 1 + (item.backpackPriority ? 12 : 0),
                 ContainerSlotIndex = -1, ItemRotationW = 1
             });
+        catalog.AddRange(StartingInventoryGrants.CreateSteamOperatingItems());
         var root = (JObject)data.GetJObject(ROOT_KEY)?.DeepClone() ?? new JObject();
         var players = root.GetJObject(PLAYERS_KEY) ?? new JObject();
         // Native starting items use 36 slots (12 belt + 24 backpack), including before Inventory initializes.

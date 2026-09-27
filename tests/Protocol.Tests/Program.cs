@@ -113,6 +113,7 @@ internal static class Program
             StartingInventoryGrantsTests.DroppedGrantsAreNotRecreated,
             StartingInventoryGrantsTests.ExistingItemsAreAdoptedWithoutDuplication,
             StartingInventoryGrantsTests.NewlyUnlockedLicenseIsGrantedOnce,
+            StartingInventoryGrantsTests.SteamToolsUseBackpackAndExistingHotbarGrantsMove,
             StartingInventoryGrantsTests.InvalidLedgerAndCatalogPreserveProfile,
             ScopedRoutineTests.ScopeDoesNotLeakAcrossYields,
             ScopedRoutineTests.FailureAndCancellationReleaseScope,
